@@ -1,4 +1,8 @@
-# ZCode Usage — 0.0.7
+# ZCode Usage — 0.1.0
+
+> **本 fork 新增:额度监控与无人值守续跑(quota-guard)**
+> 在上游「查询 + 悬浮窗显示」之上增加监控层,详见下方 [quota-guard 监控层](#quota-guard-监控层本-fork-新增)。
+> 基础功能与上游 [ssbh163/ZCode-Usage](https://github.com/ssbh163/ZCode-Usage)(MIT)一致,致谢原作者。
 
 支持API KEY与账号登录两种方式查询 GLM Coding Plan 额度(当日高峰/非高峰拆分),悬浮窗展示:
 
@@ -207,3 +211,50 @@ node zcode-usage.mjs --uninstall
 ## License
 
 MIT
+
+---
+
+## quota-guard 监控层(本 fork 新增)
+
+### 数据面:额度状态快照
+
+`zcode-usage.mjs` 在两种时机把额度快照**原子写入** `~/.zcode/scripts/usage-state.json`:
+`--hook` 模式(每次会话启动)+ 常规模式带 `--state <path>`(悬浮窗刷新即带此参数)。
+消费方一律**只读文件、不发网络请求**,hook 毫秒级返回。
+
+```json
+{
+  "updatedAt": 1760000000000,
+  "level": "PRO",
+  "host": "open.bigmodel.cn",
+  "pools": [
+    { "key": "prompt5h", "label": "5小时池", "usedPct": 8.0, "resetAt": 1760000000000 },
+    { "key": "mcp", "label": "MCP月度", "usedPct": 54.0, "resetAt": 1760000000000 }
+  ]
+}
+```
+
+### 控制面:两个 hook
+
+| 事件 | 行为 |
+|---|---|
+| `UserPromptSubmit` | 任一池 ≥ 阈值 → 注入一行警告(默认 10 分钟节流),否则静默 |
+| `Stop` | 超阈值且未布置续跑 → `{"continue":true,"reason":"<收尾协议>"}` 拦住会话,强制模型写交接文件并用 ZCode 定时自动化布置「重置 +5 分钟」的一次性续跑任务;`resume-armed.flag` 按重置周期放行,周期翻篇自动过期 |
+
+配置(可选)`~/.zcode/scripts/quota-guard-settings.json`:`{ "threshold": 95, "warnIntervalMinutes": 10 }`。
+
+### 协议:无人值守续跑
+
+skill `quota-guard` 定义交接文件格式(`~/.zcode/quota-handoff.md`)、续跑任务布置步骤、唤醒复查流程。
+长任务(如凌晨无人值守)在额度触及阈值时优雅收尾,重置后 5 分钟自动恢复,长期无人值守。
+
+### 悬浮窗增强
+
+- 每次刷新顺带 `--state` 落盘,快照全程保持新鲜
+- WinRT 原生阈值 toast(每重置周期一次),与 guard 共用同一配置
+
+### 测试
+
+```bash
+node --test plugins/zcode-usage/skills/zcode-usage/scripts/*.test.mjs
+```

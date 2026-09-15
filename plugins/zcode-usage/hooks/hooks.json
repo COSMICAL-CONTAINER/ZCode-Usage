@@ -18,6 +18,32 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "process",
+            "command": "node",
+            "args": ["${ZCODE_PLUGIN_ROOT}/skills/zcode-usage/scripts/quota-guard.mjs", "--event", "UserPromptSubmit"],
+            "timeoutMs": 5000,
+            "statusMessage": "额度阈值检查(quota-guard)"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "process",
+            "command": "node",
+            "args": ["${ZCODE_PLUGIN_ROOT}/skills/zcode-usage/scripts/quota-guard.mjs", "--event", "Stop"],
+            "timeoutMs": 5000,
+            "statusMessage": "额度收尾检查(quota-guard)"
+          }
+        ]
+      }
     ]
   }
 }

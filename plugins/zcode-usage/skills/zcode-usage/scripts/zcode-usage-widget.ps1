@@ -437,6 +437,45 @@ function Update-PeakBanner {
   $PeakBanner.Visibility = 'Visible'
 }
 
+# —— 额度阈值 toast(quota-guard):任一池超阈值弹 Windows 原生通知 ——
+# 每个重置周期只弹一次(以 "池key:resetAt" 为键,周期翻篇自动重新武装);
+# 阈值读 quota-guard-settings.json(与 quota-guard.mjs 共用),缺省 95。
+# 零依赖:直接调 WinRT ToastNotificationManager(Win10 内置),不引入 BurntToast。
+function Show-Toast([string]$title, [string]$body) {
+  try {
+    [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    [void][Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+    $texts = $xml.GetElementsByTagName('text')
+    $texts.Item(0).AppendChild($xml.CreateTextNode($title)) | Out-Null
+    $texts.Item(1).AppendChild($xml.CreateTextNode($body)) | Out-Null
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('ZCode-Usage').Show(
+      [Windows.UI.Notifications.ToastNotification]::new($xml))
+  } catch { }
+}
+function Update-QuotaToast {
+  try {
+    $th = 95.0
+    $cfgPath = Join-Path $env:USERPROFILE '.zcode\scripts\quota-guard-settings.json'
+    if (Test-Path $cfgPath) {
+      $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+      if ($cfg.threshold -gt 0 -and $cfg.threshold -lt 100) { $th = [double]$cfg.threshold }
+    }
+    foreach ($l in $script:lastLimits) {
+      $p = [double]$l.percentage
+      if ($p -lt $th) { continue }
+      $key = if ($l.type -eq 'TIME_LIMIT') { 'mcp' }
+        elseif ($l.unit -eq 3) { 'prompt5h' }
+        elseif ($l.unit -eq 6) { 'weekly' } else { "unit$($l.unit)" }
+      $cycleKey = "{0}:{1}" -f $key, [long]$l.nextResetTime
+      if ($script:toastWarned.ContainsKey($cycleKey)) { continue }
+      $script:toastWarned[$cycleKey] = $true
+      $resetTxt = if ($l.nextResetTime -gt 0) { (Format-Clock $l.nextResetTime) + ' 重置' } else { '' }
+      Show-Toast '⚡ GLM 额度警报' ("{0} 已用 {1:F0}%,{2}。可按 quota-guard 协议布置续跑。" -f $key, $p, $resetTxt)
+    }
+  } catch { }
+}
+
 function Invoke-Refresh {
   # 从手动配置回到数据视图:恢复各区块可见性(配置态把它们全部收起了)
   Hide-Setup
@@ -452,7 +491,9 @@ function Invoke-Refresh {
     $env:ANTHROPIC_AUTH_TOKEN = $mc.apiKey
     $env:ANTHROPIC_BASE_URL = $mc.apiBase
   }
-  $raw = (& node $scriptPath --json 2>&1 | Out-String).Trim()
+  # --state 让 node 子进程顺手落盘额度快照(~/.zcode/scripts/usage-state.json),
+  # 供 quota-guard hook 与自动化任务零网络读取;悬浮窗每 10 分钟刷新 = 快照保持新鲜
+  $raw = (& node $scriptPath --json --state (Join-Path $env:USERPROFILE '.zcode\scripts\usage-state.json') 2>&1 | Out-String).Trim()
   if ($mc) {
     Remove-Item Env:\ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:\ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue
@@ -488,6 +529,9 @@ function Invoke-Refresh {
         ('↻ {0} 重置 · {1}' -f (Format-Clock $l.nextResetTime), (Format-Reset $l.nextResetTime))
     }
   }
+  # 记录限额数据并做阈值 toast 检查(quota-guard)
+  $script:lastLimits = @($q.limits)
+  Update-QuotaToast
   $t = $d.modelUsage.totalUsage
   $FLabel.Text = ('📊  当日　{0:N0} 次 · {1} tokens' -f $t.totalModelCallCount, (Format-Tokens ([double]$t.totalTokensUsage)))
   # 高峰(工作日 14–18 时)/非高峰拆分由脚本算好放进 usageSplit;缺省(拆分查询失败)时收起两行明细

@@ -393,10 +393,51 @@ const iconFor = (limit) => {
 const LABEL_W = 22; // 标签列显示宽度,保证进度条对齐
 const rule = (ch) => c('2;36', ch.repeat(50));
 
+// ---------- 状态快照(quota-guard 数据面)----------
+// 消费方(quota-guard hook、自动化任务)一律只读文件、不发网络请求,hook 才能毫秒级返回。
+// 写入时机:--hook 模式(每次会话启动)+ 常规模式带 --state <path>;Windows 悬浮窗每次刷新也带 --state。
+// 池的 key 语义:prompt5h=5 小时池(unit 3)、weekly=每周额度(unit 6)、mcp=MCP 工具调用(TIME_LIMIT)
+const POOL_META = [
+  { key: 'prompt5h', label: '5小时池', match: (l) => l.type !== 'TIME_LIMIT' && l.unit === 3 },
+  { key: 'weekly', label: '每周额度', match: (l) => l.type !== 'TIME_LIMIT' && l.unit === 6 },
+  { key: 'mcp', label: 'MCP月度', match: (l) => l.type === 'TIME_LIMIT' },
+];
+function writeStateFile(quota, file) {
+  const pools = (quota.limits || []).map((l) => {
+    const meta = POOL_META.find((m) => m.match(l));
+    return {
+      key: meta ? meta.key : `unit${l.unit}`,
+      label: meta ? meta.label : labelFor(l),
+      usedPct: Number(l.percentage) || 0,
+      resetAt: Number(l.nextResetTime) || 0,
+    };
+  });
+  const snap = {
+    updatedAt: Date.now(),
+    level: String(quota.level || 'unknown').toUpperCase(),
+    host: new URL(origin).host,
+    pools,
+  };
+  // 原子替换:先写临时文件再 rename,hook 永远读不到半个文件
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(snap, null, 2));
+  fs.renameSync(tmp, file);
+}
+
 // ---------- 主流程 ----------
 async function main() {
   ensureCred();
   const quota = await get('/api/monitor/usage/quota/limit');
+
+  // 状态快照:--hook 模式固定写默认路径;常规模式带 --state <path> 时写指定路径(自动化/调试用)
+  const stateArg = flagValue('--state');
+  if (asHook || stateArg) {
+    const statePath = stateArg || path.join(os.homedir(), '.zcode', 'scripts', 'usage-state.json');
+    try {
+      fs.mkdirSync(path.dirname(statePath), { recursive: true });
+      writeStateFile(quota, statePath);
+    } catch { /* 落盘失败不影响查询主流程 */ }
+  }
 
   // SessionStart hook 模式:只查额度,输出 additionalContext JSON,注入会话上下文
   if (asHook) {
