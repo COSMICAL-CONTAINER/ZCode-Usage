@@ -39,7 +39,7 @@ description: 无人值守续跑协议。当用户要求长时间/通宵/无人�
    - prompt 必须包含(自包含,不引用本轮对话):
      ```
      读取 ~/.zcode/quota-handoff.md,按其中"恢复指引"继续执行任务。
-     开始前先运行 node ~/.zcode/scripts/zcode-usage.mjs 复查额度:
+     开始前先运行 node ~/.zcode/scripts/zcode-usage.mjs(该路径由 --install 生成;不存在时改用插件缓存同目录脚本) 复查额度:
      若仍超阈值,重新布置本任务(新的重置时间 + 5 分钟)后正常结束;低于阈值才继续干活。
      ```
 3. **写标记文件**:向 `~/.zcode/scripts/resume-armed.flag` 写入
@@ -48,12 +48,12 @@ description: 无人值守续跑协议。当用户要求长时间/通宵/无人�
 
 ## 唤醒流程(续跑任务触发的新会话)
 
-1. 先运行 `node ~/.zcode/scripts/zcode-usage.mjs` 复查额度,确认低于阈值;仍超阈值 →
+1. 先运行复查脚本确认低于阈值:`node ~/.zcode/scripts/zcode-usage.mjs`(该路径由 --install 生成;不存在时改用插件缓存 `~/.zcode/cli/plugins/cache/` 下 zcode-usage 的同目录脚本);仍超阈值 →
    重新按"收尾流程"布置下一轮,不要空转消耗。
 2. 读 `~/.zcode/quota-handoff.md`,必要时用 ReadSessionContext 按交接文件里的会话 id 找回细节。
 3. 按"下一步"继续执行;任务完成或用户接管后,删除交接文件与 `resume-armed.flag`。
 
 ## 用户主动询问时
 
-- "还剩多少额度/什么时候重置":直接运行 `node ~/.zcode/scripts/zcode-usage.mjs` 汇报,不要读快照文件猜数字。
+- "还剩多少额度/什么时候重置":运行 `node ~/.zcode/scripts/zcode-usage.mjs`(不存在时改用插件缓存同目录脚本)汇报,不要读快照文件猜数字。
 - "帮我把这个任务跑到明天早上":评估额度是否够;不够时主动提出按本协议布置续跑,征得同意后执行。

@@ -58,13 +58,13 @@ test('低于阈值时两个事件都静默', (t) => {
   assert.equal(run('UserPromptSubmit', dir), '');
 });
 
-test('Stop 超阈值 → continue:true + 收尾协议 reason', (t) => {
+test('Stop 超阈值 → decision:block + 收尾协议 reason', (t) => {
   const dir = tmpDir(t);
   const resetAt = Date.now() + 2 * 3600e3;
   stateAt(dir, [pool('prompt5h', 97.3, resetAt, '5小时池')]);
   const out = run('Stop', dir);
   const parsed = JSON.parse(out);
-  assert.equal(parsed.continue, true);
+  assert.equal(parsed.decision, 'block');
   assert.ok(parsed.reason.includes('quota-handoff.md'), 'reason 应包含交接文件路径');
   assert.ok(parsed.reason.includes('resume-armed.flag'), 'reason 应包含标记文件路径');
   assert.ok(parsed.reason.includes('CronCreate'), 'reason 应包含布置定时任务的指令');
@@ -95,7 +95,7 @@ test('Stop:过期 flag(重置周期翻篇)重新拦截', (t) => {
   const flag = path.join(dir, 'resume-armed.flag');
   writeJson(flag, { armedForResetAt: newResetAt - 5 * 3600e3 }); // 上一周期的重置点
   const parsed = JSON.parse(run('Stop', dir, { flag }));
-  assert.equal(parsed.continue, true);
+  assert.equal(parsed.decision, 'block');
 });
 
 test('UserPromptSubmit 超阈值 → 注入警告并写节流文件', (t) => {
@@ -121,5 +121,5 @@ test('settings 文件可调低阈值让 90% 也触发', (t) => {
   writeJson(path.join(dir, 'quota-guard-settings.json'), { threshold: 90 });
   stateAt(dir, [pool('prompt5h', 90.5, Date.now() + 3600e3, '5小时池')]);
   const parsed = JSON.parse(run('Stop', dir));
-  assert.equal(parsed.continue, true);
+  assert.equal(parsed.decision, 'block');
 });

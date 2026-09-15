@@ -106,6 +106,8 @@ $xamlText = @'
         <TextBlock Text="⚡ GLM Coding Plan" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource LabelBrush}"
                    VerticalAlignment="Center"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+          <TextBlock x:Name="BtnSettings" Text="⚙" FontSize="13" Foreground="{DynamicResource SecondaryBrush}" Cursor="Hand"
+                     ToolTip="设置(刷新间隔 / 快捷键 / 额度阈值)" Margin="0,0,12,0"/>
           <TextBlock x:Name="BtnRefresh" Text="↻" FontSize="13" Foreground="{DynamicResource SecondaryBrush}" Cursor="Hand"
                      ToolTip="立即刷新" Margin="0,0,12,0"/>
           <TextBlock x:Name="BtnClose" Text="✕" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource SecondaryBrush}"
@@ -137,6 +139,52 @@ $xamlText = @'
         </StackPanel>
         <TextBlock x:Name="SetupHint" Text="Key 来自智谱开放平台「API Keys」页;ZCode 用户也可在 ZCode 模型设置中查看"
                    FontSize="10" Foreground="{DynamicResource QuaternaryBrush}" Margin="0,12,0,0" TextWrapping="Wrap"/>
+      </StackPanel>
+
+      <!-- ⚙ 设置面板:刷新间隔 / 唤出快捷键 / 额度阈值(保存到 quota-guard-settings.json,与 guard 共用) -->
+      <StackPanel x:Name="SettingsPanel" Visibility="Collapsed">
+        <TextBlock Text="⚙ 设置" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource LabelBrush}"/>
+        <TextBlock Text="修改即时生效;阈值与额度告警(quota-guard)共用一份配置" FontSize="10.5" Foreground="{DynamicResource TertiaryBrush}" Margin="0,3,0,10"/>
+        <Grid Height="26">
+          <TextBlock Text="自动刷新间隔" FontSize="11.5" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
+          <ComboBox x:Name="SetRefresh" Width="110" Height="24" FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <ComboBoxItem Content="1 分钟"/>
+            <ComboBoxItem Content="5 分钟"/>
+            <ComboBoxItem Content="10 分钟"/>
+            <ComboBoxItem Content="15 分钟"/>
+            <ComboBoxItem Content="30 分钟"/>
+          </ComboBox>
+        </Grid>
+        <Grid Height="26" Margin="0,8,0,0">
+          <TextBlock Text="唤出快捷键" FontSize="11.5" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <ComboBox x:Name="SetHotkeyMod" Width="76" Height="24" FontSize="11.5" Margin="0,0,8,0">
+              <ComboBoxItem Content="Ctrl"/>
+              <ComboBoxItem Content="Alt"/>
+              <ComboBoxItem Content="Shift"/>
+              <ComboBoxItem Content="Win"/>
+            </ComboBox>
+            <ComboBox x:Name="SetHotkeyKey" Width="76" Height="24" FontSize="11.5"/>
+          </StackPanel>
+        </Grid>
+        <Grid Height="26" Margin="0,8,0,0">
+          <TextBlock Text="额度告警阈值" FontSize="11.5" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
+          <ComboBox x:Name="SetThreshold" Width="110" Height="24" FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <ComboBoxItem Content="80%"/>
+            <ComboBoxItem Content="85%"/>
+            <ComboBoxItem Content="90%"/>
+            <ComboBoxItem Content="95%"/>
+          </ComboBox>
+        </Grid>
+        <TextBlock x:Name="SetHint" Text="" FontSize="10" Foreground="#FFA94D" Margin="0,8,0,0" TextWrapping="Wrap"/>
+        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+          <Border x:Name="BtnSaveSettings" CornerRadius="6" Background="#0A84FF" Padding="14,5" Cursor="Hand" Margin="0,0,10,0">
+            <TextBlock Text="保存" FontSize="11.5" FontWeight="SemiBold" Foreground="White"/>
+          </Border>
+          <Border x:Name="BtnCancelSettings" CornerRadius="6" Background="{DynamicResource TrackBrush}" Padding="12,5" Cursor="Hand">
+            <TextBlock Text="取消" FontSize="11" Foreground="{DynamicResource SecondaryBrush}"/>
+          </Border>
+        </StackPanel>
       </StackPanel>
 
       <!-- 高峰期横幅(周一至周五 14:00–18:00 常驻,结束自动收起):橙色倒计时 + 时段进度条 -->
@@ -232,6 +280,15 @@ $SetupKey = & $el 'SetupKey'
 $BtnSaveKey = & $el 'BtnSaveKey'
 $BtnClearKey = & $el 'BtnClearKey'
 $SetupHint = & $el 'SetupHint'
+$BtnSettings = & $el 'BtnSettings'
+$SettingsPanel = & $el 'SettingsPanel'
+$SetRefresh = & $el 'SetRefresh'
+$SetHotkeyMod = & $el 'SetHotkeyMod'
+$SetHotkeyKey = & $el 'SetHotkeyKey'
+$SetThreshold = & $el 'SetThreshold'
+$SetHint = & $el 'SetHint'
+$BtnSaveSettings = & $el 'BtnSaveSettings'
+$BtnCancelSettings = & $el 'BtnCancelSettings'
 $rows = @()
 for ($i = 1; $i -le 3; $i++) {
   $rows += [pscustomobject]@{
@@ -265,6 +322,23 @@ function Save-Pos {
     @{ Left = $win.Left; Top = $win.Top } | ConvertTo-Json | Set-Content -Path $posFile -Encoding ASCII
   } catch { }
 }
+
+# —— 设置读写(quota-guard-settings.json,与 quota-guard.mjs 共用;guard 只关心 threshold/warnIntervalMinutes)——
+# 顶层加载一次,供 定时器间隔/全局热键/阈值 toast 使用;⚙ 面板保存后回写此文件
+$settingsFile = Join-Path $env:USERPROFILE '.zcode\scripts\quota-guard-settings.json'
+function Read-SettingsJson {
+  try { if (Test-Path $settingsFile) { return (Get-Content $settingsFile -Raw | ConvertFrom-Json) } } catch { }
+  return $null
+}
+$script:refreshChoices = @(1, 5, 10, 15, 30)
+$script:thresholdChoices = @(80, 85, 90, 95)
+$script:modChoices = @( @{ V = 2; Name = 'Ctrl' }, @{ V = 1; Name = 'Alt' }, @{ V = 4; Name = 'Shift' }, @{ V = 8; Name = 'Win' } )
+function ModsName([int]$m) { $hit = $script:modChoices | Where-Object { $_.V -eq $m }; if ($hit) { $hit[0].Name } else { "?$m" } }
+$_cfg = Read-SettingsJson
+$script:refreshMinutes = if ($_cfg -and ($script:refreshChoices -contains [int]$_cfg.refreshMinutes)) { [int]$_cfg.refreshMinutes } else { 10 }
+$script:hotkeyModifiers = if ($_cfg -and ($script:modChoices.V -contains [int]$_cfg.hotkeyModifiers)) { [int]$_cfg.hotkeyModifiers } else { 2 }
+$script:hotkeyKey = if ($_cfg -and ([int]$_cfg.hotkeyKey -ge 0x30) -and ([int]$_cfg.hotkeyKey -le 0x5A)) { [int]$_cfg.hotkeyKey } else { 0x47 }
+$_cfg = $null
 
 # —— 手动凭据兜底:查询失败时在面板里选服务商 + 粘贴 Key ——
 # 与 macOS HUD 共用 ~/.zcode/zcode-usage-manual.json,zcode-usage.mjs 的 CLI 查询同样读它
@@ -441,6 +515,9 @@ function Update-PeakBanner {
 # 每个重置周期只弹一次(以 "池key:resetAt" 为键,周期翻篇自动重新武装);
 # 阈值读 quota-guard-settings.json(与 quota-guard.mjs 共用),缺省 95。
 # 零依赖:直接调 WinRT ToastNotificationManager(Win10 内置),不引入 BurntToast。
+# 已告警周期表必须先初始化:$null 上调 ContainsKey 会抛异常被 catch 吞掉,导致永远弹不出
+$script:toastWarned = @{}
+$script:poolLabels = @{ mcp = 'MCP月度'; prompt5h = '5小时池'; weekly = '每周额度' }
 function Show-Toast([string]$title, [string]$body) {
   try {
     [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
@@ -470,15 +547,17 @@ function Update-QuotaToast {
       $cycleKey = "{0}:{1}" -f $key, [long]$l.nextResetTime
       if ($script:toastWarned.ContainsKey($cycleKey)) { continue }
       $script:toastWarned[$cycleKey] = $true
+      $label = if ($script:poolLabels.ContainsKey($key)) { $script:poolLabels[$key] } else { $key }
       $resetTxt = if ($l.nextResetTime -gt 0) { (Format-Clock $l.nextResetTime) + ' 重置' } else { '' }
-      Show-Toast '⚡ GLM 额度警报' ("{0} 已用 {1:F0}%,{2}。可按 quota-guard 协议布置续跑。" -f $key, $p, $resetTxt)
+      Show-Toast '⚡ GLM 额度警报' ("{0} 已用 {1:F0}%,{2}。可按 quota-guard 协议布置续跑。" -f $label, $p, $resetTxt)
     }
   } catch { }
 }
 
 function Invoke-Refresh {
-  # 从手动配置回到数据视图:恢复各区块可见性(配置态把它们全部收起了)
+  # 从手动配置/设置回到数据视图:恢复各区块可见性(配置态把它们全部收起了)
   Hide-Setup
+  Hide-Settings
   $Sep.Visibility = 'Visible'
   $FooterGrid.Visibility = 'Visible'
   $FSub.Visibility = 'Visible'; $Hint.Visibility = 'Visible'
@@ -577,13 +656,104 @@ function Save-Setup {
   Invoke-Refresh
 }
 
-# 自动刷新间隔(分钟),按需调整
-$refreshMinutes = 10
-$timer = New-Object System.Windows.Threading.DispatcherTimer
-$timer.Interval = [TimeSpan]::FromMinutes($refreshMinutes)
-$timer.Add_Tick({ if ($SetupPanel.Visibility -ne 'Visible') { Invoke-Refresh } })
+# —— ⚙ 设置面板:刷新间隔 / 唤出快捷键 / 额度阈值 ——
+# 保存到 quota-guard-settings.json(与 guard 共用,guard 的 threshold/warnIntervalMinutes 原样保留);
+# 保存后即时生效:定时器改间隔,热键解旧注新(被占用则回退并提示)
+$script:keyItems = @()
+$script:keyVks = @()
+foreach ($c in ([int][char]'A'..[int][char]'Z')) {
+  $script:keyItems += [string][char]$c
+  $script:keyVks += $c
+}
+foreach ($d in 0..9) {
+  $script:keyItems += [string]$d
+  $script:keyVks += (0x30 + $d)
+}
+foreach ($it in $script:keyItems) { [void]$SetHotkeyKey.Items.Add($it) }
 
-# ↻ 刷新,✕ 收起(隐藏不退出);悬停变亮
+function Hide-Settings { $SettingsPanel.Visibility = 'Collapsed' }
+function Show-Settings {
+  $Meta.Text = '设置'
+  $PeakBanner.Visibility = 'Collapsed'
+  foreach ($r in $rows) { $r.Panel.Visibility = 'Collapsed' }
+  $Sep.Visibility = 'Collapsed'; $FooterGrid.Visibility = 'Collapsed'
+  $PeakRow.Visibility = 'Collapsed'; $OffPeakRow.Visibility = 'Collapsed'
+  $FSub.Visibility = 'Collapsed'; $Hint.Visibility = 'Collapsed'
+  $BtnKey.Visibility = 'Collapsed'
+  Hide-Setup
+  $cfg = Read-SettingsJson
+  $curRefresh = if ($cfg -and ($script:refreshChoices -contains [int]$cfg.refreshMinutes)) { [int]$cfg.refreshMinutes } else { $script:refreshMinutes }
+  $curMods = if ($cfg -and ($script:modChoices.V -contains [int]$cfg.hotkeyModifiers)) { [int]$cfg.hotkeyModifiers } else { $script:hotkeyModifiers }
+  $curKeyVk = if ($cfg -and ([int]$cfg.hotkeyKey -ge 0x30) -and ([int]$cfg.hotkeyKey -le 0x5A)) { [int]$cfg.hotkeyKey } else { $script:hotkeyKey }
+  $curTh = if ($cfg -and ($script:thresholdChoices -contains [int]$cfg.threshold)) { [int]$cfg.threshold } else { 95 }
+  $SetRefresh.SelectedIndex = [Math]::Max(0, [Array]::IndexOf($script:refreshChoices, $curRefresh))
+  $SetThreshold.SelectedIndex = [Math]::Max(0, [Array]::IndexOf($script:thresholdChoices, $curTh))
+  $mi = 0
+  for ($i = 0; $i -lt $script:modChoices.Count; $i++) { if ($script:modChoices[$i].V -eq $curMods) { $mi = $i } }
+  $SetHotkeyMod.SelectedIndex = $mi
+  $SetHotkeyKey.SelectedIndex = [Math]::Max(0, [Array]::IndexOf($script:keyVks, $curKeyVk))
+  $SetHint.Text = ''
+  $SettingsPanel.Visibility = 'Visible'
+}
+function Save-Settings {
+  try { Add-Content -Path (Join-Path $env:USERPROFILE '.zcode\scripts\save-settings.log') -Value ("ENTER " + (Get-Date -Format 'HH:mm:ss')) } catch { }
+  $refresh = $script:refreshChoices[[Math]::Max(0, $SetRefresh.SelectedIndex)]
+  $th = $script:thresholdChoices[[Math]::Max(0, $SetThreshold.SelectedIndex)]
+  $mods = $script:modChoices[[Math]::Max(0, $SetHotkeyMod.SelectedIndex)].V
+  $vk = $script:keyVks[[Math]::Max(0, $SetHotkeyKey.SelectedIndex)]
+  # 合并保留 guard 的其它配置键(如 warnIntervalMinutes)
+  $cfg = Read-SettingsJson
+  $obj = @{
+    threshold = $th
+    warnIntervalMinutes = if ($cfg -and $cfg.warnIntervalMinutes) { [int]$cfg.warnIntervalMinutes } else { 10 }
+    refreshMinutes = $refresh
+    hotkeyModifiers = $mods
+    hotkeyKey = $vk
+  }
+  try {
+    # -ErrorAction Stop:全局 SilentlyContinue 会吞掉非终止错误,导致"看起来保存了其实没写"
+    $obj | ConvertTo-Json | Set-Content -Path $settingsFile -Encoding ASCII -ErrorAction Stop
+    try { Add-Content -Path (Join-Path $env:USERPROFILE '.zcode\scripts\save-settings.log') -Value ("WROTE " + $settingsFile) } catch { }
+  } catch {
+    try { Add-Content -Path (Join-Path $env:USERPROFILE '.zcode\scripts\save-settings.log') -Value ("ERR " + $_.Exception.Message) } catch { }
+    $SetHint.Text = "保存失败: $($_.Exception.Message)"; return
+  }
+  # 定时器:改间隔即生效
+  $script:refreshMinutes = $refresh
+  $timer.Interval = [TimeSpan]::FromMinutes($refresh)
+  # 快捷键:解旧注新;被占用则回退原键并留在面板提示
+  if ($mods -ne $script:hotkeyModifiers -or $vk -ne $script:hotkeyKey) {
+    $ok = $false
+    try {
+      [void][GLMNative.Hotkey]::UnregisterHotKey($script:helper.Handle, 0xB001)
+      $ok = [GLMNative.Hotkey]::RegisterHotKey($script:helper.Handle, 0xB001, $mods, $vk)
+    } catch { }
+    if ($ok) {
+      $script:hotkeyModifiers = $mods
+      $script:hotkeyKey = $vk
+    } else {
+      try { [void][GLMNative.Hotkey]::RegisterHotKey($script:helper.Handle, 0xB001, $script:hotkeyModifiers, $script:hotkeyKey) } catch { }
+      $SetHint.Text = "新快捷键 $(ModsName $mods)+$([char]$vk) 已被其他软件占用,已保留原键 $(ModsName $script:hotkeyModifiers)+$([char]$script:hotkeyKey)"
+      return
+    }
+  }
+  Hide-Settings
+  Invoke-Refresh
+}
+
+# 自动刷新间隔:来自 quota-guard-settings.json(⚙ 面板可改,保存即生效)
+$timer = New-Object System.Windows.Threading.DispatcherTimer
+$timer.Interval = [TimeSpan]::FromMinutes($script:refreshMinutes)
+$timer.Add_Tick({ if ($SetupPanel.Visibility -ne 'Visible' -and $SettingsPanel.Visibility -ne 'Visible') { Invoke-Refresh } })
+
+# ⚙ 设置,↻ 刷新,✕ 收起(隐藏不退出);悬停变亮
+$BtnSettings.Add_MouseEnter({ $BtnSettings.Foreground = Brush $script:theme.Label })
+$BtnSettings.Add_MouseLeave({ $BtnSettings.Foreground = Brush $script:theme.Secondary })
+$BtnSettings.Add_MouseLeftButtonUp({ Show-Settings })
+$BtnSaveSettings.Add_MouseEnter({ $BtnSaveSettings.Background = Brush '#3D9BFF' })
+$BtnSaveSettings.Add_MouseLeave({ $BtnSaveSettings.Background = Brush '#0A84FF' })
+$BtnSaveSettings.Add_MouseLeftButtonUp({ Save-Settings })
+$BtnCancelSettings.Add_MouseLeftButtonUp({ Hide-Settings })
 $BtnRefresh.Add_MouseEnter({ $BtnRefresh.Foreground = Brush $script:theme.Label })
 $BtnRefresh.Add_MouseLeave({ $BtnRefresh.Foreground = Brush $script:theme.Secondary })
 $BtnRefresh.Add_MouseLeftButtonUp({ Invoke-Refresh })
@@ -591,21 +761,20 @@ $BtnClose.Add_MouseEnter({ $BtnClose.Foreground = Brush '#FF5A5A' })
 $BtnClose.Add_MouseLeave({ $BtnClose.Foreground = Brush $script:theme.Secondary })
 $BtnClose.Add_MouseLeftButtonUp({ $win.Hide() })
 
-# 拖动(避开按钮),记忆位置;配置态禁用拖拽,否则鼠标点不进下拉框和密码框
+# 拖动(避开按钮),记忆位置;配置态/设置态禁用拖拽,否则鼠标点不进下拉框和密码框
 $win.Add_MouseLeftButtonDown({
   $src = $_.OriginalSource
-  if ($SetupPanel.Visibility -eq 'Visible') { return }
-  # 🔑 按钮必须排除:点按钮的 MouseLeftButtonDown 一旦触发 DragMove,
+  if ($SetupPanel.Visibility -eq 'Visible' -or $SettingsPanel.Visibility -eq 'Visible') { return }
+  # 🔑/⚙ 按钮必须排除:点按钮的 MouseLeftButtonDown 一旦触发 DragMove,
   # 系统移动循环会吞掉随后的 MouseLeftButtonUp,按钮点击就"没反应"。
   # 命中源可能是 Border 本体(内边距)或里面的 TextBlock(文字),两者都要放行
   $onKey = ($src -eq $BtnKey) -or ($src.Parent -eq $BtnKey)
-  if ($src -ne $BtnRefresh -and $src -ne $BtnClose -and -not $onKey) { $win.DragMove(); Save-Pos }
+  if ($src -ne $BtnRefresh -and $src -ne $BtnClose -and $src -ne $BtnSettings -and -not $onKey) { $win.DragMove(); Save-Pos }
 })
 $win.Add_Closing({ Save-Pos })
 
-# 全局快捷键(可改):0x2=Ctrl,0x1=Alt,0x4=Shift 可组合;G=0x47
-$hotkeyModifiers = 0x2
-$hotkeyKey = 0x47
+# 全局快捷键(⚙ 面板可改):0x2=Ctrl,0x1=Alt,0x4=Shift 可组合;G=0x47
+# 初值来自 quota-guard-settings.json(见顶部设置读取),保存即解旧注新
 $script:helper = $null
 $win.Add_SourceInitialized({
   $script:helper = New-Object System.Windows.Interop.WindowInteropHelper($win)

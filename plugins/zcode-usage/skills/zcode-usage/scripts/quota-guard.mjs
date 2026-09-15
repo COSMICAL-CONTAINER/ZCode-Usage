@@ -74,14 +74,27 @@ const fmtResetLocal = (ms) => (ms > 0
   ? new Date(ms).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
   : '未知');
 
+// 调用日志:每次触发都留痕(hook 是静默设计,没有它无法定位"为什么没拦")
+function debugLog(msg) {
+  try {
+    fs.appendFileSync(path.join(dir, 'quota-guard.log'),
+      `${new Date().toISOString()} [${event}] ${msg}\n`);
+  } catch { }
+}
+
 function main() {
   const { threshold, warnIntervalMinutes } = loadSettings();
   const state = readJson(stateFile);
-  if (!state || !Array.isArray(state.pools)) return; // 还没有快照:静默
-  if (Date.now() - Number(state.updatedAt || 0) > STATE_MAX_AGE_MS) return; // 快照过期:静默
+  if (!state || !Array.isArray(state.pools)) { debugLog('pass: 无快照'); return; }
+  const ageSec = Math.round((Date.now() - Number(state.updatedAt || 0)) / 1000);
+  if (Date.now() - Number(state.updatedAt || 0) > STATE_MAX_AGE_MS) { debugLog(`pass: 快照过期 ${ageSec}s`); return; }
 
   const over = state.pools.filter((p) => Number(p.usedPct) >= threshold);
-  if (!over.length) return;
+  if (!over.length) {
+    debugLog(`pass: 未超阈值(各池 ${state.pools.map((p) => `${p.key}:${Number(p.usedPct).toFixed(0)}%`).join(' ')} < ${threshold}%)`);
+    return;
+  }
+  debugLog(`hit: ${over.map((p) => `${p.key}:${Number(p.usedPct).toFixed(0)}%`)} ≥ ${threshold}%(快照 ${ageSec}s 前)`);
 
   // 绑定约束:超阈值池中重置时间最晚者——每周额度耗尽时,5 小时池重置了也没用
   const binding = over.reduce((a, b) => ((Number(b.resetAt) || 0) > (Number(a.resetAt) || 0) ? b : a));
@@ -90,7 +103,10 @@ function main() {
 
   if (event === 'Stop') {
     const flag = readJson(flagFile);
-    if (bindingReset > 0 && flag && Number(flag.armedForResetAt) >= bindingReset) return; // 本周期已布置续跑:放行
+    if (bindingReset > 0 && flag && Number(flag.armedForResetAt) >= bindingReset) { debugLog('pass: flag 已布置,放行'); return; }
+    // Stop 的拦截必须走 decision:"block"(ZCode 源码对 Stop 的 block 路径:
+    // blockRequested=true + reason 反馈给模型强制续跑);continue:true 实测不生效
+    debugLog('拦截 → 输出 decision:block 收尾协议');
     const reason = [
       `额度警报:${poolList} 已达阈值 ${threshold}%(约 ${fmtResetLocal(bindingReset)} 重置)。不要继续任务主体,立即执行收尾协议:`,
       `1. 把当前任务状态写入 ~/.zcode/quota-handoff.md:任务目标、已完成进度、下一步计划、恢复所需的全部上下文;`,
@@ -98,14 +114,14 @@ function main() {
       `3. 向 ~/.zcode/scripts/resume-armed.flag 写入 {"armedForResetAt": ${bindingReset}} 标记已布置(之后 Stop 检查会放行);`,
       `4. 完成后正常结束本次回复,不要再发起新的大型工作。`,
     ].join('\n');
-    console.log(JSON.stringify({ continue: true, reason }));
+    console.log(JSON.stringify({ decision: 'block', reason }));
     return;
   }
 
   // UserPromptSubmit:节流告警
   const now = Date.now();
   const last = readJson(warnFile);
-  if (last && now - Number(last.at || 0) < warnIntervalMinutes * 60_000) return;
+  if (last && now - Number(last.at || 0) < warnIntervalMinutes * 60_000) { debugLog('pass: 告警节流窗口内'); return; }
   try { fs.writeFileSync(warnFile, JSON.stringify({ at: now, pools: over.map((p) => p.key) })); } catch { }
   const line = `【额度警报】${poolList} 已达阈值 ${threshold}%,` +
     `${bindingReset > now ? fmtCountdown(bindingReset - now) : '即将'}后重置。` +
