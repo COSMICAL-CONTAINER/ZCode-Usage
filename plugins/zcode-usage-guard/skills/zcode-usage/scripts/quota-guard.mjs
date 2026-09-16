@@ -184,7 +184,7 @@ async function main() {
   try { fs.writeFileSync(warnFile, JSON.stringify({ at: now, pools: over.map((p) => p.key) })); } catch { }
   const line = `【额度警报】${poolList} 已达各自阈值,` +
     `${bindingReset > now ? fmtCountdown(bindingReset - now) : '即将'}后重置。` +
-    `新开长任务前先斟酌;若准备收尾,请按 quota-guard 协议布置续跑。`;
+    `新开长任务前先斟酌;若准备收尾,请按「额度守卫」协议布置续跑。`;
   console.log(JSON.stringify({
     hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: line },
   }));
