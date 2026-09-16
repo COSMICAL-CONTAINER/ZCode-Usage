@@ -320,14 +320,22 @@ function Get-IsDarkTheme {
         $ok = [GLMNative.ZCodeProbe]::PrintWindow($z.MainWindowHandle, $hdc, 2)
         $g.ReleaseHdc($hdc); $g.Dispose()
         if ($ok) {
-          $lum = 0.0; $n = 0
+          # 采 9 个点的亮度,同时记录极差:ZCode 弹出纯白对话框/窗口未渲染时,
+          # PrintWindow 会采到一片均匀的白色——那是无效样本,不能据此切换主题
+          $lum = 0.0; $n = 0; $minL = 255.0; $maxL = 0.0
           foreach ($fx in @(0.012, 0.018, 0.024)) {
             foreach ($fy in @(0.3, 0.5, 0.7)) {
               $c = $bmp.GetPixel([int]($w * $fx), [int]($h * $fy))
-              $lum += 0.299 * $c.R + 0.587 * $c.G + 0.114 * $c.B; $n++
+              $lv = 0.299 * $c.R + 0.587 * $c.G + 0.114 * $c.B
+              $lum += $lv; $n++
+              if ($lv -lt $minL) { $minL = $lv }
+              if ($lv -gt $maxL) { $maxL = $lv }
             }
           }
           $bmp.Dispose()
+          if (($maxL - $minL) -lt 8 -and $null -ne $script:lastKnownDark) {
+            return $script:lastKnownDark # 全平 = 无效样本:沿用上次结论,防止整窗被带成白色
+          }
           $script:lastKnownDark = (($lum / $n) -lt 110)
           return $script:lastKnownDark
         }
@@ -591,19 +599,28 @@ $win.Add_SourceInitialized({
 })
 
 # ZCode 启动检测:none→running 才算启动(避免 Electron 子进程重建误唤起)
-$script:zcodeWasRunning = [bool](Get-Process -Name 'ZCode' -ErrorAction SilentlyContinue)
+# 主题切换去抖:连续两次探测一致才换肤——单次坏采样(纯白弹窗/未渲染的新窗口)不触发
+$script:darkStreak = 0
+$script:pendingDark = $null
 $zcodeTimer = New-Object System.Windows.Threading.DispatcherTimer
 $zcodeTimer.Interval = [TimeSpan]::FromMilliseconds(2000)
 $zcodeTimer.Add_Tick({
   # ZCode 外观跟随:探测 ZCode 主窗口配色,变化即整体换肤(并记日志便于排查)
   $dark = Get-IsDarkTheme
   if ($dark -ne $script:isDark) {
-    $script:isDark = $dark
-    Apply-Theme
-    try {
-      Add-Content -Path (Join-Path $env:USERPROFILE '.zcode\scripts\widget-theme.log') `
-        -Value ("{0} -> {1}" -f (Get-Date -Format 'MM/dd HH:mm:ss'), $(if ($dark) { 'dark' } else { 'light' }))
-    } catch { }
+    $script:darkStreak = 1 + [int]($script:pendingDark -eq $dark)
+    $script:pendingDark = $dark
+    if ($script:darkStreak -ge 2) {
+      $script:isDark = $dark
+      Apply-Theme
+      try {
+        Add-Content -Path (Join-Path $env:USERPROFILE '.zcode\scripts\widget-theme.log') `
+          -Value ("{0} -> {1}" -f (Get-Date -Format 'MM/dd HH:mm:ss'), $(if ($dark) { 'dark' } else { 'light' }))
+      } catch { }
+      $script:darkStreak = 0
+    }
+  } else {
+    $script:darkStreak = 0
   }
   # 高峰横幅:进入/退出高峰与倒计时刷新(2s 粒度)
   Update-PeakBanner
