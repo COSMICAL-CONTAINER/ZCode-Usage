@@ -4,8 +4,8 @@
   "owner": { "name": "ssbh163" },
   "plugins": [
     {
-      "name": "zcode-usage",
-      "source": "./plugins/zcode-usage",
+      "name": "zcode-usage-guard",
+      "source": "./plugins/zcode-usage-guard",
       "category": "development",
       "version": "0.0.7",
       "description": "支持API KEY与账号登录两种方式查询 GLM Coding Plan 额度(当日高峰/非高峰拆分),悬浮窗展示。"

@@ -155,6 +155,7 @@ if (argv.includes('--uninstall')) {
   process.exit(0);
 }
 
+
 // ---------- 凭据与域名 ----------
 function fromArgs() {
   const key = flagValue('--key'), base = flagValue('--base');
@@ -318,6 +319,25 @@ export function peakOf(modelUsage) {
   return { calls, tokens };
 }
 
+// ---------- 周期历史导出:--export-csv <out.csv>(读本地 JSONL,无需凭据、不发请求) ----------
+const historyArg = flagValue('--history');
+const csvArg = flagValue('--export-csv');
+if (csvArg) {
+  const histFile = historyArg || path.join(os.homedir(), '.zcode', 'scripts', 'usage-history.jsonl');
+  const rows = fs.existsSync(histFile)
+    ? fs.readFileSync(histFile, 'utf8').split('\n').filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)
+    : [];
+  const head = 'cycle_start_beijing,cycle_end_beijing,calls,tokens,peak_calls,peak_tokens';
+  const body = rows.map((r) => [
+    bjFmt(Number(r.cycleStart)), bjFmt(Number(r.cycleEnd)),
+    Number(r.calls) || 0, Number(r.tokens) || 0,
+    Number(r.peakCalls) || 0, Number(r.peakTokens) || 0,
+  ].join(','));
+  fs.writeFileSync(csvArg, [head, ...body].join('\n') + (body.length ? '\n' : ''));
+  console.log(`已导出 ${body.length} 条周期记录 -> ${csvArg}`);
+  process.exit(0);
+}
 // ---------- 颜色与排版 ----------
 // 仅在真终端且明确支持 ANSI 时着色(Git Bash 有 TERM,Windows Terminal 有 WT_SESSION);
 // 管道/重定向/老式 cmd 下自动输出纯文本,避免乱码。NO_COLOR 可强制关闭。
@@ -424,6 +444,50 @@ function writeStateFile(quota, file) {
   fs.renameSync(tmp, file);
 }
 
+// ---------- 周期历史:把每个已完成 5 小时周期的用量补录进 JSONL ----------
+const qsRange = (startMs, endMs) => `?startTime=${encodeURIComponent(bjFmt(startMs))}&endTime=${encodeURIComponent(bjFmt(endMs))}`;
+
+/** 需要补录的已完成周期末端列表:从最近一个往前数,只取已结束且晚于 lastEnd 的,最多 maxBack 个 */
+export function missingCycleEnds(nextReset, cycleMs, lastEnd, maxBack, nowMs) {
+  const ends = [];
+  for (let end = nextReset - cycleMs; end > lastEnd && ends.length < maxBack; end -= cycleMs) {
+    if (end <= nowMs) ends.push(end); // 当前周期(nextReset 处)尚未结束,不记录
+  }
+  return ends;
+}
+
+/** 补录已完成周期的模型用量到 JSONL(假设周期连续;长期闲置造成的边界漂移以实际记录为准)。
+ *  只在跨周期时发请求(通常 0-1 个新周期,最多回填 2 个),其余刷新零额外开销。 */
+async function recordHistory(quota, file) {
+  const l = (quota.limits || []).find((x) => x.type !== 'TIME_LIMIT' && x.unit === 3);
+  if (!l || !(Number(l.nextResetTime) > 0)) return;
+  const cycleMs = (Number(l.number) || 5) * 3600_000;
+  const nextReset = Number(l.nextResetTime);
+  const records = fs.existsSync(file)
+    ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean)
+      .map((x) => { try { return JSON.parse(x); } catch { return null; } }).filter(Boolean)
+    : [];
+  const lastEnd = records.length ? Number(records[records.length - 1].cycleEnd) : 0;
+  const ends = missingCycleEnds(nextReset, cycleMs, lastEnd, 2, Date.now());
+  for (const end of ends) {
+    const start = end - cycleMs;
+    const mu = await get('/api/monitor/usage/model-usage' + qsRange(start, end)).catch(() => null);
+    const t = mu && mu.totalUsage;
+    if (!t) break; // 查不到就不硬造,下次刷新再试
+    const { calls, tokens } = peakOf(mu);
+    records.push({
+      cycleStart: start, cycleEnd: end,
+      calls: Number(t.totalModelCallCount) || 0,
+      tokens: Number(t.totalTokensUsage) || 0,
+      peakCalls: calls, peakTokens: tokens,
+      recordedAt: Date.now(),
+    });
+  }
+  if (records.length) {
+    fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  }
+}
+
 // ---------- 主流程 ----------
 async function main() {
   ensureCred();
@@ -437,6 +501,14 @@ async function main() {
       fs.mkdirSync(path.dirname(statePath), { recursive: true });
       writeStateFile(quota, statePath);
     } catch { /* 落盘失败不影响查询主流程 */ }
+  }
+
+  // 周期历史:--history <jsonl> 时补录刚结束的 5 小时周期(跨周期才发请求,平时零开销)
+  if (historyArg) {
+    try {
+      fs.mkdirSync(path.dirname(historyArg), { recursive: true });
+      await recordHistory(quota, historyArg);
+    } catch { /* 历史补录失败不影响查询主流程 */ }
   }
 
   // SessionStart hook 模式:只查额度,输出 additionalContext JSON,注入会话上下文

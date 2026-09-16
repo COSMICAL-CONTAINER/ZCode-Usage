@@ -63,7 +63,7 @@ Add-Type -Namespace GLMNative -Name ZCodeProbe -MemberDefinition @'
 
 $scriptPath = Join-Path $env:USERPROFILE '.zcode\scripts\zcode-usage.mjs'
 if (-not (Test-Path $scriptPath)) {
-  $cached = Get-ChildItem "$env:USERPROFILE\.zcode\cli\plugins\cache\*\zcode-usage\*\skills\zcode-usage\scripts\zcode-usage.mjs" |
+  $cached = Get-ChildItem "$env:USERPROFILE\.zcode\cli\plugins\cache\*\zcode-usage*\*\skills\zcode-usage\scripts\zcode-usage.mjs" |
     Sort-Object FullName -Descending | Select-Object -First 1
   if ($cached) { $scriptPath = $cached.FullName }
 }
@@ -168,8 +168,29 @@ $xamlText = @'
           </StackPanel>
         </Grid>
         <Grid Height="26" Margin="0,8,0,0">
-          <TextBlock Text="额度告警阈值" FontSize="11.5" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
-          <ComboBox x:Name="SetThreshold" Width="110" Height="24" FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center">
+          <TextBlock Text="5小时池阈值" FontSize="11.5" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
+          <ComboBox x:Name="SetTh5h" Width="110" Height="24" FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <ComboBoxItem Content="关闭"/>
+            <ComboBoxItem Content="80%"/>
+            <ComboBoxItem Content="85%"/>
+            <ComboBoxItem Content="90%"/>
+            <ComboBoxItem Content="95%"/>
+          </ComboBox>
+        </Grid>
+        <Grid Height="26" Margin="0,8,0,0">
+          <TextBlock Text="每周额度阈值" FontSize="11.5" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
+          <ComboBox x:Name="SetThWeekly" Width="110" Height="24" FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <ComboBoxItem Content="关闭"/>
+            <ComboBoxItem Content="80%"/>
+            <ComboBoxItem Content="85%"/>
+            <ComboBoxItem Content="90%"/>
+            <ComboBoxItem Content="95%"/>
+          </ComboBox>
+        </Grid>
+        <Grid Height="26" Margin="0,8,0,0">
+          <TextBlock Text="MCP月度阈值" FontSize="11.5" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
+          <ComboBox x:Name="SetThMcp" Width="110" Height="24" FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <ComboBoxItem Content="关闭"/>
             <ComboBoxItem Content="80%"/>
             <ComboBoxItem Content="85%"/>
             <ComboBoxItem Content="90%"/>
@@ -240,6 +261,8 @@ $xamlText = @'
           <TextBlock Text="🔑 配置 API Key" FontSize="11" FontWeight="Medium" Foreground="White"/>
         </Border>
       </Grid>
+      <!-- 模型拆分紧贴当日行,居中显示;高峰/非高峰明细放其后 -->
+      <TextBlock x:Name="FSub" Text="" FontSize="10.5" Foreground="{DynamicResource TertiaryBrush}" Margin="0,3,0,0" TextAlignment="Center"/>
       <Grid x:Name="PeakRow" Height="15" Margin="0,5,0,0">
         <TextBlock Text="高峰期(工作日 14–18 时)" FontSize="10.5" Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center"/>
         <TextBlock x:Name="PeakValue" Text="" FontSize="10.5" HorizontalAlignment="Right" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
@@ -248,7 +271,6 @@ $xamlText = @'
         <TextBlock Text="非高峰期" FontSize="10.5" Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center"/>
         <TextBlock x:Name="OffPeakValue" Text="" FontSize="10.5" HorizontalAlignment="Right" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
       </Grid>
-      <TextBlock x:Name="FSub" Text="" FontSize="10.5" Foreground="{DynamicResource TertiaryBrush}" Margin="0,3,0,0"/>
       <TextBlock x:Name="Hint" Text="Ctrl+G 唤出 / 收起 · 拖拽面板可移动位置" FontSize="10" Foreground="{DynamicResource QuaternaryBrush}" Margin="0,2,0,0"/>
     </StackPanel>
   </Border>
@@ -285,7 +307,9 @@ $SettingsPanel = & $el 'SettingsPanel'
 $SetRefresh = & $el 'SetRefresh'
 $SetHotkeyMod = & $el 'SetHotkeyMod'
 $SetHotkeyKey = & $el 'SetHotkeyKey'
-$SetThreshold = & $el 'SetThreshold'
+$SetTh5h = & $el 'SetTh5h'
+$SetThWeekly = & $el 'SetThWeekly'
+$SetThMcp = & $el 'SetThMcp'
 $SetHint = & $el 'SetHint'
 $BtnSaveSettings = & $el 'BtnSaveSettings'
 $BtnCancelSettings = & $el 'BtnCancelSettings'
@@ -446,8 +470,10 @@ function Set-Row($row, $label, $value, $pct, $sub) {
   $row.Label.Text = $label
   $row.Value.Text = $value
   $row.Fill.Background = Brush $col
-  # BarView:填充宽 = max(比例*宽, 条高) —— 极小也画出圆点
-  $w = [Math]::Round($trackWidth * [Math]::Min(100, [Math]::Max(0, $p)) / 100)
+  # 进度条语义 = 剩余量:满条绿,随额度消耗缩短并变橙(用量≥60)变红(用量≥85);
+  # 颜色仍按使用量分档(保持 60/85 两个告警点),长度按剩余绘制,所见即所剩
+  $rem = 100 - [Math]::Min(100, [Math]::Max(0, $p))
+  $w = [Math]::Round($trackWidth * $rem / 100)
   $row.Fill.Width = [Math]::Max($w, 6)
   $row.Sub.Text = $sub
 }
@@ -497,6 +523,10 @@ function Get-PeakWindow {
   return $null
 }
 function Update-PeakBanner {
+  # 设置/配置面板打开时收起横幅:2s 定时器会反复刷新横幅,不收起会顶到「保存/取消」按钮上
+  if ($SettingsPanel.Visibility -eq 'Visible' -or $SetupPanel.Visibility -eq 'Visible') {
+    $PeakBanner.Visibility = 'Collapsed'; return
+  }
   $w = Get-PeakWindow
   if (-not $w) { $PeakBanner.Visibility = 'Collapsed'; return }
   $now = Get-PeakNow
@@ -530,20 +560,31 @@ function Show-Toast([string]$title, [string]$body) {
       [Windows.UI.Notifications.ToastNotification]::new($xml))
   } catch { }
 }
-function Update-QuotaToast {
+# 池的有效阈值:thresholds.<key> 覆盖全局 threshold;0 = 关闭该池
+function Get-EffectiveThreshold([string]$key) {
+  $th = 95.0
   try {
-    $th = 95.0
     $cfgPath = Join-Path $env:USERPROFILE '.zcode\scripts\quota-guard-settings.json'
     if (Test-Path $cfgPath) {
       $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
       if ($cfg.threshold -gt 0 -and $cfg.threshold -lt 100) { $th = [double]$cfg.threshold }
+      if ($cfg.thresholds) {
+        $v = $cfg.thresholds.$key
+        if ($null -ne $v) { return [double]$v }
+      }
     }
+  } catch { }
+  return $th
+}
+function Update-QuotaToast {
+  try {
     foreach ($l in $script:lastLimits) {
       $p = [double]$l.percentage
-      if ($p -lt $th) { continue }
       $key = if ($l.type -eq 'TIME_LIMIT') { 'mcp' }
         elseif ($l.unit -eq 3) { 'prompt5h' }
         elseif ($l.unit -eq 6) { 'weekly' } else { "unit$($l.unit)" }
+      $th = Get-EffectiveThreshold $key
+      if ($th -le 0 -or $p -lt $th) { continue }
       $cycleKey = "{0}:{1}" -f $key, [long]$l.nextResetTime
       if ($script:toastWarned.ContainsKey($cycleKey)) { continue }
       $script:toastWarned[$cycleKey] = $true
@@ -570,9 +611,8 @@ function Invoke-Refresh {
     $env:ANTHROPIC_AUTH_TOKEN = $mc.apiKey
     $env:ANTHROPIC_BASE_URL = $mc.apiBase
   }
-  # --state 让 node 子进程顺手落盘额度快照(~/.zcode/scripts/usage-state.json),
-  # 供 quota-guard hook 与自动化任务零网络读取;悬浮窗每 10 分钟刷新 = 快照保持新鲜
-  $raw = (& node $scriptPath --json --state (Join-Path $env:USERPROFILE '.zcode\scripts\usage-state.json') 2>&1 | Out-String).Trim()
+  # --state 落盘额度快照、--history 补录每周期用量(跨周期才发请求),供 guard/统计零网络读取
+  $raw = (& node $scriptPath --json --state (Join-Path $env:USERPROFILE '.zcode\scripts\usage-state.json') --history (Join-Path $env:USERPROFILE '.zcode\scripts\usage-history.jsonl') 2>&1 | Out-String).Trim()
   if ($mc) {
     Remove-Item Env:\ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:\ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue
@@ -595,18 +635,26 @@ function Invoke-Refresh {
   }
   foreach ($r in $rows) { $r.Panel.Visibility = 'Visible' }
   $q = $d.quota
+  # 记录各额度池对应的行;套餐没有的池(如 V1 Pro 无周限额)把对应行收起,避免留空白行
+  $rowByPool = @{}
   foreach ($l in $q.limits) {
     $p = [double]$l.percentage
     if ($l.type -eq 'TIME_LIMIT') {
-      Set-Row $rows[2] '🔧  MCP 工具调用（1个月）' ('{0:N0} / {1:N0} 次' -f $l.currentValue, $l.usage) $p `
+      $rowByPool['mcp'] = $rows[2]
+      Set-Row $rows[2] '🔧  MCP 工具调用(1个月)' ('{0:N0} / {1:N0} 次' -f $l.currentValue, $l.usage) $p `
         ('剩余 {0:N0} · ↻ {1} 重置 · {2}' -f $l.remaining, (Format-Clock $l.nextResetTime), (Format-Reset $l.nextResetTime))
     } elseif ($l.unit -eq 3) {
+      $rowByPool['prompt5h'] = $rows[0]
       Set-Row $rows[0] '🕐  5 小时 Prompt 池' ('剩余 {0:F1}%' -f (100 - $p)) $p `
         ('↻ {0} 重置 · {1}' -f (Format-Clock $l.nextResetTime), (Format-Reset $l.nextResetTime))
     } elseif ($l.unit -eq 6) {
+      $rowByPool['weekly'] = $rows[1]
       Set-Row $rows[1] '📅  每周额度' ('剩余 {0:F1}%' -f (100 - $p)) $p `
         ('↻ {0} 重置 · {1}' -f (Format-Clock $l.nextResetTime), (Format-Reset $l.nextResetTime))
     }
+  }
+  for ($i = 0; $i -lt 3; $i++) {
+    if (-not ($rowByPool.Values -contains $rows[$i])) { $rows[$i].Panel.Visibility = 'Collapsed' }
   }
   # 记录限额数据并做阈值 toast 检查(quota-guard)
   $script:lastLimits = @($q.limits)
@@ -672,6 +720,20 @@ foreach ($d in 0..9) {
 foreach ($it in $script:keyItems) { [void]$SetHotkeyKey.Items.Add($it) }
 
 function Hide-Settings { $SettingsPanel.Visibility = 'Collapsed' }
+# 每池阈值下拉回填:thresholds.<key> 覆盖全局;0 → 「关闭」(索引 0)
+function Set-ThresholdCombo($combo, [string]$key, $cfg) {
+  $v = 95
+  if ($cfg) {
+    if ($cfg.threshold -ge 80 -and $cfg.threshold -le 95) { $v = [int]$cfg.threshold }
+    if ($cfg.thresholds) {
+      $pv = $cfg.thresholds.$key
+      if ($null -ne $pv) { $v = [int]$pv }
+    }
+  }
+  if ($v -le 0) { $combo.SelectedIndex = 0; return }
+  $idx = [Array]::IndexOf($script:thresholdChoices, $v)
+  $combo.SelectedIndex = if ($idx -ge 0) { $idx + 1 } else { 4 }
+}
 function Show-Settings {
   $Meta.Text = '设置'
   $PeakBanner.Visibility = 'Collapsed'
@@ -685,9 +747,11 @@ function Show-Settings {
   $curRefresh = if ($cfg -and ($script:refreshChoices -contains [int]$cfg.refreshMinutes)) { [int]$cfg.refreshMinutes } else { $script:refreshMinutes }
   $curMods = if ($cfg -and ($script:modChoices.V -contains [int]$cfg.hotkeyModifiers)) { [int]$cfg.hotkeyModifiers } else { $script:hotkeyModifiers }
   $curKeyVk = if ($cfg -and ([int]$cfg.hotkeyKey -ge 0x30) -and ([int]$cfg.hotkeyKey -le 0x5A)) { [int]$cfg.hotkeyKey } else { $script:hotkeyKey }
-  $curTh = if ($cfg -and ($script:thresholdChoices -contains [int]$cfg.threshold)) { [int]$cfg.threshold } else { 95 }
   $SetRefresh.SelectedIndex = [Math]::Max(0, [Array]::IndexOf($script:refreshChoices, $curRefresh))
-  $SetThreshold.SelectedIndex = [Math]::Max(0, [Array]::IndexOf($script:thresholdChoices, $curTh))
+  # 每池独立阈值:thresholds.<key> 覆盖全局;0 = 关闭(下拉第 0 项)
+  Set-ThresholdCombo $SetTh5h 'prompt5h' $cfg
+  Set-ThresholdCombo $SetThWeekly 'weekly' $cfg
+  Set-ThresholdCombo $SetThMcp 'mcp' $cfg
   $mi = 0
   for ($i = 0; $i -lt $script:modChoices.Count; $i++) { if ($script:modChoices[$i].V -eq $curMods) { $mi = $i } }
   $SetHotkeyMod.SelectedIndex = $mi
@@ -698,13 +762,19 @@ function Show-Settings {
 function Save-Settings {
   try { Add-Content -Path (Join-Path $env:USERPROFILE '.zcode\scripts\save-settings.log') -Value ("ENTER " + (Get-Date -Format 'HH:mm:ss')) } catch { }
   $refresh = $script:refreshChoices[[Math]::Max(0, $SetRefresh.SelectedIndex)]
-  $th = $script:thresholdChoices[[Math]::Max(0, $SetThreshold.SelectedIndex)]
+  # 每池独立阈值:下拉索引 0 = 关闭(0),1..4 = 80/85/90/95
+  $ths = @{}
+  foreach ($pair in @(@('prompt5h', $SetTh5h), @('weekly', $SetThWeekly), @('mcp', $SetThMcp))) {
+    $i = [Math]::Max(0, $pair[1].SelectedIndex)
+    $ths[$pair[0]] = if ($i -eq 0) { 0 } else { [int]$script:thresholdChoices[$i - 1] }
+  }
   $mods = $script:modChoices[[Math]::Max(0, $SetHotkeyMod.SelectedIndex)].V
   $vk = $script:keyVks[[Math]::Max(0, $SetHotkeyKey.SelectedIndex)]
   # 合并保留 guard 的其它配置键(如 warnIntervalMinutes)
   $cfg = Read-SettingsJson
   $obj = @{
-    threshold = $th
+    threshold = $ths['prompt5h']
+    thresholds = $ths
     warnIntervalMinutes = if ($cfg -and $cfg.warnIntervalMinutes) { [int]$cfg.warnIntervalMinutes } else { 10 }
     refreshMinutes = $refresh
     hotkeyModifiers = $mods
@@ -753,7 +823,7 @@ $BtnSettings.Add_MouseLeftButtonUp({ Show-Settings })
 $BtnSaveSettings.Add_MouseEnter({ $BtnSaveSettings.Background = Brush '#3D9BFF' })
 $BtnSaveSettings.Add_MouseLeave({ $BtnSaveSettings.Background = Brush '#0A84FF' })
 $BtnSaveSettings.Add_MouseLeftButtonUp({ Save-Settings })
-$BtnCancelSettings.Add_MouseLeftButtonUp({ Hide-Settings })
+$BtnCancelSettings.Add_MouseLeftButtonUp({ Hide-Settings; Invoke-Refresh })
 $BtnRefresh.Add_MouseEnter({ $BtnRefresh.Foreground = Brush $script:theme.Label })
 $BtnRefresh.Add_MouseLeave({ $BtnRefresh.Foreground = Brush $script:theme.Secondary })
 $BtnRefresh.Add_MouseLeftButtonUp({ Invoke-Refresh })

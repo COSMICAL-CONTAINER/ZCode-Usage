@@ -4,5 +4,5 @@ desktop.ini
 node_modules/
 
 # macos/scripts/zcode-usage.mjs 由 build.sh 编译时从 skills 正本自动同步,是生成物,不入库
-plugins/zcode-usage/macos/scripts/
+plugins/zcode-usage-guard/macos/scripts/
 test-state.json

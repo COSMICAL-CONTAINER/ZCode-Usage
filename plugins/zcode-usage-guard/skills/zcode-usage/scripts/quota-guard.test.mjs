@@ -28,13 +28,19 @@ function stateAt(dir, pools, ageMs = 0) {
 
 const pool = (key, usedPct, resetAt, label = key) => ({ key, label, usedPct, resetAt });
 
-/** 运行 guard;opts 可覆盖 state/flag/warn 文件路径(默认都在 dir 下) */
+/** 运行 guard;opts 可覆盖 state/flag/warn 文件路径(默认都在 dir 下);
+ *  默认以 sess-test 登记会话,opts.noOptin=true 用于未登记场景,opts.input 作 stdin 负载 */
 function run(event, dir, opts = {}) {
-  const args = [script, '--event', event, '--dir', dir];
+  const args = [script, '--event', event, '--dir', dir, '--session', opts.session || 'sess-test'];
   if (opts.state) args.push('--state-file', opts.state);
   if (opts.flag) args.push('--flag-file', opts.flag);
   if (opts.warn) args.push('--warn-file', opts.warn);
-  const r = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: 15000 });
+  if (!opts.noOptin) {
+    writeJson(path.join(dir, 'quota-guard-optin.json'),
+      { sessions: { [opts.session || 'sess-test']: { at: Date.now() } } });
+  }
+  const r = spawnSync(process.execPath, args,
+    { encoding: 'utf8', timeout: 15000, input: opts.input || '' });
   assert.equal(r.status, 0, `exit 0, stderr: ${r.stderr}`);
   return r.stdout.trim();
 }
@@ -121,5 +127,53 @@ test('settings 文件可调低阈值让 90% 也触发', (t) => {
   writeJson(path.join(dir, 'quota-guard-settings.json'), { threshold: 90 });
   stateAt(dir, [pool('prompt5h', 90.5, Date.now() + 3600e3, '5小时池')]);
   const parsed = JSON.parse(run('Stop', dir));
+  assert.equal(parsed.decision, 'block');
+});
+
+test('每池独立阈值:mcp=0 关闭后不参与触发,只拦 prompt5h', (t) => {
+  const dir = tmpDir(t);
+  writeJson(path.join(dir, 'quota-guard-settings.json'),
+    { threshold: 95, thresholds: { prompt5h: 95, weekly: 95, mcp: 0 } });
+  const soon = Date.now() + 3600e3;
+  stateAt(dir, [pool('prompt5h', 96, soon, '5小时池'), pool('mcp', 60, Date.now() + 5 * 86400e3, 'MCP月度')]);
+  const parsed = JSON.parse(run('Stop', dir));
+  assert.equal(parsed.decision, 'block');
+  assert.ok(parsed.reason.includes('5小时池'), '应拦截 5 小时池');
+  assert.ok(!parsed.reason.includes('MCP月度'), '已关闭的 MCP 不应出现在拦截里');
+});
+
+test('每池独立阈值:MCP 可单独设低阈值独立触发', (t) => {
+  const dir = tmpDir(t);
+  writeJson(path.join(dir, 'quota-guard-settings.json'),
+    { threshold: 95, thresholds: { prompt5h: 95, mcp: 50 } });
+  stateAt(dir, [pool('mcp', 55, Date.now() + 5 * 86400e3, 'MCP月度')]);
+  const parsed = JSON.parse(run('Stop', dir));
+  assert.equal(parsed.decision, 'block');
+  assert.ok(parsed.reason.includes('MCP月度'));
+});
+
+test('每池独立阈值:全部关闭时即使 100% 也静默', (t) => {
+  const dir = tmpDir(t);
+  writeJson(path.join(dir, 'quota-guard-settings.json'),
+    { threshold: 95, thresholds: { prompt5h: 0, mcp: 0 } });
+  stateAt(dir, [pool('prompt5h', 100, Date.now() + 3600e3, '5小时池'), pool('mcp', 100, Date.now() + 86400e3, 'MCP月度')]);
+  assert.equal(run('Stop', dir), '');
+});
+
+test('会话未登记:即使 100% 也静默放行(登记制)', (t) => {
+  const dir = tmpDir(t);
+  stateAt(dir, [pool('prompt5h', 100, Date.now() + 3600e3, '5小时池')]);
+  assert.equal(run('Stop', dir, { noOptin: true }), '');
+  assert.equal(run('UserPromptSubmit', dir, { noOptin: true }), '');
+});
+
+test('stdin 负载里的 session_id 也能匹配登记', (t) => {
+  const dir = tmpDir(t);
+  writeJson(path.join(dir, 'quota-guard-optin.json'), { sessions: { 'sess-stdin': { at: Date.now() } } });
+  stateAt(dir, [pool('prompt5h', 96, Date.now() + 3600e3, '5小时池')]);
+  const r = spawnSync(process.execPath, [script, '--event', 'Stop', '--dir', dir],
+    { encoding: 'utf8', timeout: 15000, input: JSON.stringify({ session_id: 'sess-stdin' }) });
+  assert.equal(r.status, 0, `exit 0, stderr: ${r.stderr}`);
+  const parsed = JSON.parse(r.stdout.trim());
   assert.equal(parsed.decision, 'block');
 });

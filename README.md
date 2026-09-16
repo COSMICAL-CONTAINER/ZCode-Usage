@@ -1,7 +1,8 @@
-# ZCode Usage — 0.1.0
+# zcode-usage-guard — 0.2.0
 
 > **本 fork 新增:额度监控与无人值守续跑(quota-guard)**
 > 在上游「查询 + 悬浮窗显示」之上增加监控层,详见下方 [quota-guard 监控层](#quota-guard-监控层本-fork-新增)。
+> 本 fork:https://github.com/COSMICAL-CONTAINER/zcode-usage-guard
 > 基础功能与上游 [ssbh163/ZCode-Usage](https://github.com/ssbh163/ZCode-Usage)(MIT)一致,致谢原作者;
 > 本 fork 的新增代码同样以 **MIT** 协议发布(见文末「协议与致谢」)。
 
@@ -23,7 +24,7 @@
 |:---:|:---:|
 | <img src="assets/mac.jpg" alt="浅色主题下的悬浮窗" width="750" /> | <img src="assets/windows.png" alt="深色主题下的悬浮窗" width="853" /> |
 
-进度条颜色随用量变化:绿色(充足)→ 橙色(≥60%)→ 红色(≥85%)。对话内 `/zcode-usage:usage` 命令和终端卡片输出同样的数据。
+进度条颜色随用量变化:绿色(充足)→ 橙色(≥60%)→ 红色(≥85%)。对话内 `/zcode-usage-guard:usage` 命令和终端卡片输出同样的数据。
 
 ## 前提条件
 
@@ -49,7 +50,7 @@
 
 ### 方式 C · 只用脚本,不装插件
 
-下载 [zcode-usage.mjs](plugins/zcode-usage/skills/zcode-usage/scripts/zcode-usage.mjs)(悬浮窗需连同 [zcode-usage-widget.ps1](plugins/zcode-usage/skills/zcode-usage/scripts/zcode-usage-widget.ps1) 一起下载,建议直接下载整个 zip),运行:
+下载 [zcode-usage.mjs](plugins/zcode-usage-guard/skills/zcode-usage/scripts/zcode-usage.mjs)(悬浮窗需连同 [zcode-usage-widget.ps1](plugins/zcode-usage-guard/skills/zcode-usage/scripts/zcode-usage-widget.ps1) 一起下载,建议直接下载整个 zip),运行:
 
 ```bash
 node zcode-usage.mjs --install
@@ -63,7 +64,7 @@ node zcode-usage.mjs --install
 
 安装插件后**新开一个对话**(命令在会话启动时加载):
 
-- 输入 `/zcode-usage:usage`
+- 输入 `/zcode-usage-guard:usage`
 - 或直接问:"查一下 Coding Plan 用量""5 小时池还剩多少""周额度什么时候重置"
 
 助手会运行脚本并把结果整理成表格。
@@ -170,10 +171,10 @@ API Key 无效或过期,去智谱开放平台重新获取。
 zcode-usage-plugin/                       ← 市场仓库根目录
 ├── .zcode-plugin/marketplace.json      ← 市场清单
 ├── marketplace.json                    ← 根目录副本(兼容不同读取位置)
-└── plugins/zcode-usage/                ← 插件本体
+└── plugins/zcode-usage-guard/                ← 插件本体
     ├── .zcode-plugin/plugin.json
     ├── hooks/hooks.json                ← SessionStart:按设备拉起悬浮窗 + 注入用量摘要
-    ├── commands/usage.md               ← /zcode-usage:usage 命令
+    ├── commands/usage.md               ← /zcode-usage-guard:usage 命令
     ├── macos/                          ← macOS 原生悬浮窗(ZCodeUsageHUD.swift + build.sh)
     └── skills/zcode-usage/
         ├── SKILL.md
@@ -242,7 +243,16 @@ MIT
 | `UserPromptSubmit` | 任一池 ≥ 阈值 → 注入一行警告(默认 10 分钟节流),否则静默 |
 | `Stop` | 超阈值且未布置续跑 → `{"decision":"block","reason":"<收尾协议>"}` 拦住会话,强制模型写交接文件并用 ZCode 定时自动化布置「重置 +5 分钟」的一次性续跑任务;`resume-armed.flag` 按重置周期放行,周期翻篇自动过期 |
 
-配置(可选)`~/.zcode/scripts/quota-guard-settings.json`:`{ "threshold": 95, "warnIntervalMinutes": 10 }`。
+配置(可选)`~/.zcode/scripts/quota-guard-settings.json`,`thresholds` 可按池覆盖全局阈值,
+设为 `0` 表示关闭该池监控(如只想盯 5 小时池):
+
+```json
+{
+  "threshold": 95,
+  "thresholds": { "prompt5h": 95, "weekly": 95, "mcp": 0 },
+  "warnIntervalMinutes": 10
+}
+```
 
 ### 协议:无人值守续跑
 
@@ -253,12 +263,12 @@ skill `quota-guard` 定义交接文件格式(`~/.zcode/quota-handoff.md`)、续�
 
 - 每次刷新顺带 `--state` 落盘,快照全程保持新鲜
 - WinRT 原生阈值 toast(每重置周期一次),与 guard 共用同一配置
-- ⚙ 设置面板:自动刷新间隔(5/10/15/30 分钟)、唤出快捷键改键(冲突自动回退)、额度告警阈值,保存即生效
+- ⚙ 设置面板:自动刷新间隔(1/5/10/15/30 分钟)、唤出快捷键改键(冲突自动回退)、每池独立告警阈值(可单独关闭 MCP),保存即生效
 
 ### 测试
 
 ```bash
-node --test plugins/zcode-usage/skills/zcode-usage/scripts/*.test.mjs
+node --test plugins/zcode-usage-guard/skills/zcode-usage/scripts/*.test.mjs
 ```
 
 ### 协议与致谢

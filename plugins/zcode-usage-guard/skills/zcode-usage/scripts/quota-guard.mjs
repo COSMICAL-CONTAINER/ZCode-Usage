@@ -6,17 +6,21 @@
  * Windows 悬浮窗每次刷新也会带 --state)。本脚本只读本地文件、不发网络请求——
  * ZCode hook 是 inline 执行的,必须毫秒级返回。
  *
+ * **登记制**:只对已登记会话生效。会话把自身 id 写进 ~/.zcode/scripts/quota-guard-optin.json
+ * (`{"sessions": {"<会话id>": {"at": <epoch>}}}`)后才会被拦截/告警;未登记的对话零打扰。
+ * 会话 id 来源优先级:环境变量 CLAUDE_SESSION_ID → --session 参数 → stdin 负载的 session_id。
+ *
  * 事件(--event):
- *   UserPromptSubmit  任一池 ≥ 阈值时注入一行警告上下文(warnIntervalMinutes 内不重复),否则静默
- *   Stop              超阈值且未布置续跑 → {"continue":true,"reason":"<收尾协议>"} 拦住会话;
- *                     resume-armed.flag 记录的 armedForResetAt ≥ 绑定池重置时间 → 视为已布置,放行。
- *                     重置周期翻篇后 flag 自动过期,新周期重新拦截。
+ *   UserPromptSubmit  已登记且任一池 ≥ 该池阈值 → 注入一行警告上下文(warnIntervalMinutes 节流)
+ *   Stop              已登记、超阈值且未布置续跑 → {"decision":"block","reason":"<收尾协议>"}
+ *                     拦住会话;resume-armed.flag 记录的 armedForResetAt ≥ 绑定池重置时间 → 放行,
+ *                     重置周期翻篇后自动过期。
  *
- * 输出为 ZCode hook 严格 schema(多余字段会被丢弃),一切正常时静默 exit 0;
- * 本脚本永远不用 exit 2(不阻塞工具)。
- * 可选配置 ~/.zcode/scripts/quota-guard-settings.json:{ "threshold": 95, "warnIntervalMinutes": 10 }
- *
- * 测试参数:--dir 可把 state/flag/warn/settings 全部重定向到临时目录(供 node --test 使用)。
+ * 输出为 ZCode hook 严格 schema,一切正常时静默 exit 0;本脚本永远不用 exit 2。
+ * 可选配置 ~/.zcode/scripts/quota-guard-settings.json:
+ *   { "threshold": 95, "thresholds": {"prompt5h":95,"weekly":95,"mcp":0}, "warnIntervalMinutes": 10 }
+ * thresholds 按池覆盖全局阈值,设为 0 表示关闭该池监控。
+ * 测试参数:--dir/--session/--state-file/--flag-file/--warn-file/--settings-file 可重定向(供 node --test)。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -34,9 +38,10 @@ const stateFile = argValue('--state-file') || path.join(dir, 'usage-state.json')
 const flagFile = argValue('--flag-file') || path.join(dir, 'resume-armed.flag');
 const warnFile = argValue('--warn-file') || path.join(dir, 'quota-guard-warn.json');
 const settingsFile = argValue('--settings-file') || path.join(dir, 'quota-guard-settings.json');
+const optinFile = argValue('--optin-file') || path.join(dir, 'quota-guard-optin.json');
 
-// 排干 stdin(hook runner 会写事件负载,不消费可能让写方阻塞),unref 使其不拖住进程退出
-try { process.stdin.resume(); process.stdin.unref(); } catch { }
+// 会话 id:环境变量优先,--session 参数次之,stdin 负载兜底(见 readStdinSession)
+let sessionId = process.env.CLAUDE_SESSION_ID || argValue('--session') || '';
 
 const DEFAULT_THRESHOLD = 95;
 const DEFAULT_WARN_INTERVAL_MIN = 10;
@@ -52,10 +57,26 @@ function loadSettings() {
   const s = readJson(settingsFile) || {};
   const threshold = Number(s.threshold);
   const warnMin = Number(s.warnIntervalMinutes);
+  const globalTh = threshold > 0 && threshold < 100 ? threshold : DEFAULT_THRESHOLD;
+  // 每池可覆盖:thresholds.prompt5h / weekly / mcp,设为 0 表示关闭该池监控
+  const overrides = {};
+  if (s.thresholds && typeof s.thresholds === 'object') {
+    for (const [k, v] of Object.entries(s.thresholds)) {
+      const n = Number(v);
+      overrides[k] = Number.isFinite(n) && n >= 0 && n < 100 ? n : null;
+    }
+  }
   return {
-    threshold: threshold > 0 && threshold < 100 ? threshold : DEFAULT_THRESHOLD,
+    threshold: globalTh,
+    thresholds: overrides,
     warnIntervalMinutes: warnMin > 0 ? warnMin : DEFAULT_WARN_INTERVAL_MIN,
   };
+}
+
+// 池的有效阈值:每池覆盖优先,0 = 关闭该池监控
+function effectiveThreshold(thresholds, key, globalTh) {
+  const v = thresholds ? thresholds[key] : undefined;
+  return v === undefined || v === null ? globalTh : v;
 }
 
 function fmtCountdown(ms) {
@@ -82,19 +103,57 @@ function debugLog(msg) {
   } catch { }
 }
 
-function main() {
-  const { threshold, warnIntervalMinutes } = loadSettings();
+// stdin:hook runner 会写事件负载;收齐(至多 250ms)避免写方阻塞,超时即走不拖住进程
+async function readStdinPayload() {
+  if (process.stdin.isTTY) return '';
+  return await new Promise((resolve) => {
+    let buf = '';
+    const done = () => { try { process.stdin.destroy(); } catch { } resolve(buf); };
+    const t = setTimeout(done, 250);
+    process.stdin.on('data', (d) => { buf += d; });
+    process.stdin.on('end', () => { clearTimeout(t); done(); });
+    process.stdin.on('error', () => { clearTimeout(t); done(); });
+  });
+}
+
+function isOptedIn(file, sid) {
+  if (!sid) return false;
+  const o = readJson(file);
+  return !!(o && o.sessions && o.sessions[sid]);
+}
+
+async function main() {
+  if (!sessionId) {
+    const payload = await readStdinPayload();
+    try {
+      const j = JSON.parse(payload);
+      sessionId = String(j.session_id || '');
+    } catch { }
+  }
+
+  const { threshold, thresholds, warnIntervalMinutes } = loadSettings();
+  const opted = isOptedIn(optinFile, sessionId);
+  debugLog(`session=${sessionId || '未知'} 登记=${opted ? '是' : '否'}`);
+  if (!opted) { debugLog('pass: 会话未登记 quota-guard'); return; } // 未登记的对话零打扰
+
   const state = readJson(stateFile);
   if (!state || !Array.isArray(state.pools)) { debugLog('pass: 无快照'); return; }
   const ageSec = Math.round((Date.now() - Number(state.updatedAt || 0)) / 1000);
   if (Date.now() - Number(state.updatedAt || 0) > STATE_MAX_AGE_MS) { debugLog(`pass: 快照过期 ${ageSec}s`); return; }
 
-  const over = state.pools.filter((p) => Number(p.usedPct) >= threshold);
+  const poolInfo = (p) => {
+    const eff = effectiveThreshold(thresholds, p.key, threshold);
+    return eff <= 0 ? `${p.key}:关` : `${p.key}:${Number(p.usedPct).toFixed(0)}%/${eff}%`;
+  };
+  const over = state.pools.filter((p) => {
+    const eff = effectiveThreshold(thresholds, p.key, threshold);
+    return eff > 0 && Number(p.usedPct) >= eff;
+  });
   if (!over.length) {
-    debugLog(`pass: 未超阈值(各池 ${state.pools.map((p) => `${p.key}:${Number(p.usedPct).toFixed(0)}%`).join(' ')} < ${threshold}%)`);
+    debugLog(`pass: 未超阈值(各池 ${state.pools.map(poolInfo).join(' ')})`);
     return;
   }
-  debugLog(`hit: ${over.map((p) => `${p.key}:${Number(p.usedPct).toFixed(0)}%`)} ≥ ${threshold}%(快照 ${ageSec}s 前)`);
+  debugLog(`hit: ${over.map((p) => `${p.key}:${Number(p.usedPct).toFixed(0)}%`)} ≥ 各池阈值(快照 ${ageSec}s 前)`);
 
   // 绑定约束:超阈值池中重置时间最晚者——每周额度耗尽时,5 小时池重置了也没用
   const binding = over.reduce((a, b) => ((Number(b.resetAt) || 0) > (Number(a.resetAt) || 0) ? b : a));
@@ -108,9 +167,9 @@ function main() {
     // blockRequested=true + reason 反馈给模型强制续跑);continue:true 实测不生效
     debugLog('拦截 → 输出 decision:block 收尾协议');
     const reason = [
-      `额度警报:${poolList} 已达阈值 ${threshold}%(约 ${fmtResetLocal(bindingReset)} 重置)。不要继续任务主体,立即执行收尾协议:`,
+      `额度警报:${poolList} 已达各自阈值(约 ${fmtResetLocal(bindingReset)} 重置)。不要继续任务主体,立即执行收尾协议:`,
       `1. 把当前任务状态写入 ~/.zcode/quota-handoff.md:任务目标、已完成进度、下一步计划、恢复所需的全部上下文;`,
-      `2. 用 CronCreate 布置一次性自动化(${fmtResetLocal(bindingReset)} 后 5 分钟触发,recurring=false、maxRuns=1),prompt 必须要求:先读 ~/.zcode/quota-handoff.md,再运行 node ~/.zcode/scripts/zcode-usage.mjs 复查额度(低于阈值才继续),然后接着执行任务;`,
+      `2. 用 CronCreate 布置一次性自动化(${fmtResetLocal(bindingReset)} 后 5 分钟触发,recurring=false、maxRuns=1),prompt 必须要求:先读 ~/.zcode/quota-handoff.md 并把你的会话登记进 ~/.zcode/scripts/quota-guard-optin.json,再复查额度(低于阈值才继续),然后接着执行任务;`,
       `3. 向 ~/.zcode/scripts/resume-armed.flag 写入 {"armedForResetAt": ${bindingReset}} 标记已布置(之后 Stop 检查会放行);`,
       `4. 完成后正常结束本次回复,不要再发起新的大型工作。`,
     ].join('\n');
@@ -123,7 +182,7 @@ function main() {
   const last = readJson(warnFile);
   if (last && now - Number(last.at || 0) < warnIntervalMinutes * 60_000) { debugLog('pass: 告警节流窗口内'); return; }
   try { fs.writeFileSync(warnFile, JSON.stringify({ at: now, pools: over.map((p) => p.key) })); } catch { }
-  const line = `【额度警报】${poolList} 已达阈值 ${threshold}%,` +
+  const line = `【额度警报】${poolList} 已达各自阈值,` +
     `${bindingReset > now ? fmtCountdown(bindingReset - now) : '即将'}后重置。` +
     `新开长任务前先斟酌;若准备收尾,请按 quota-guard 协议布置续跑。`;
   console.log(JSON.stringify({

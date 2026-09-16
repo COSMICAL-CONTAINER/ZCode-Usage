@@ -68,3 +68,30 @@ test('peakOf:按桶标签归类高峰;畸形标签跳过;空响应归零', () =>
     { calls: 13, tokens: 130 },
   );
 });
+
+// ---- 周期历史:missingCycleEnds ----
+import { missingCycleEnds } from './zcode-usage.mjs';
+
+test('missingCycleEnds:从最近已完成周期往前补录,不含未结束的当前周期', () => {
+  const now = 1_000_000_000_000;
+  const cycle = 5 * 3600_000;
+  const nextReset = now + 2 * 3600_000; // 当前周期还剩 2 小时
+  const ends = missingCycleEnds(nextReset, cycle, 0, 2, now);
+  assert.deepEqual(ends, [nextReset - cycle, nextReset - 2 * cycle]);
+});
+
+test('missingCycleEnds:尊重 lastEnd,不重复补录', () => {
+  const now = 1_000_000_000_000;
+  const cycle = 5 * 3600_000;
+  const nextReset = now + 3600_000;
+  const lastEnd = nextReset - cycle; // 最近一个已补录
+  const ends = missingCycleEnds(nextReset, cycle, lastEnd, 2, now);
+  // 该周期已在记录里(lastEnd),更旧的周期按时间顺序不回填 → 无需补录
+  assert.deepEqual(ends, []);
+});
+
+test('missingCycleEnds:maxBack 限制回填数量', () => {
+  const now = 1_000_000_000_000;
+  const ends = missingCycleEnds(now, 5 * 3600_000, 0, 2, now);
+  assert.equal(ends.length, 2);
+});

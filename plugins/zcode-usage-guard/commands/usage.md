@@ -5,7 +5,7 @@ allowed-tools: Bash, Read
 
 # GLM Coding Plan 用量查询
 
-使用 Skill 工具调用 `zcode-usage:zcode-usage` 技能执行一次用量查询(如技能不可用,按技能文档直接运行其 scripts/zcode-usage.mjs 脚本)。
+使用 Skill 工具调用 `zcode-usage-guard:zcode-usage` 技能执行一次用量查询(如技能不可用,按技能文档直接运行其 scripts/zcode-usage.mjs 脚本)。
 
 ## 汇报要求
 
