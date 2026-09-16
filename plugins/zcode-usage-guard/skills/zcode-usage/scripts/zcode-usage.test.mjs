@@ -95,3 +95,32 @@ test('missingCycleEnds:maxBack 限制回填数量', () => {
   const ends = missingCycleEnds(now, 5 * 3600_000, 0, 2, now);
   assert.equal(ends.length, 2);
 });
+
+// ---- 本机消耗:localUsageToday ----
+import { localUsageToday } from './zcode-usage.mjs';
+
+test('localUsageToday:按北京时间当日过滤并聚合(不含昨日/无用量行)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'local-usage-'));
+  const now = Date.now();
+  const dayStart = bjDayStartMs(now); // 北京当日 00:00(epoch)
+  const iso = (ms) => new Date(ms).toISOString();
+  const mk = (completedAt, total, inp, outp, modelId = 'GLM-5.3-Flash') =>
+    JSON.stringify({ completedAt, model: { modelId }, response: { usage: { inputTokens: inp, outputTokens: outp, totalTokens: total } } });
+  // 今天北京时间内的一条 + 北京昨天的一条 + 无用量的一条
+  const lines = [
+    mk(iso(dayStart + 10 * 3600_000), 1000, 900, 100),
+    mk(iso(dayStart - 3600_000), 9999, 9999, 9999), // 北京昨天:不入账
+    mk(iso(dayStart + 11 * 3600_000)).replace('"totalTokens"', '"otherTokens"'), // 无用量
+  ];
+  fs.writeFileSync(path.join(dir, 'model-io-sess_test.jsonl'), lines.join('\n'));
+  const u = localUsageToday(now, dir);
+  assert.equal(u.calls, 1);
+  assert.equal(u.totalTokens, 1000);
+  assert.equal(u.inputTokens, 900);
+  assert.equal(u.outputTokens, 100);
+  assert.equal(u.byModel['GLM-5.3-Flash'].calls, 1);
+});
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';

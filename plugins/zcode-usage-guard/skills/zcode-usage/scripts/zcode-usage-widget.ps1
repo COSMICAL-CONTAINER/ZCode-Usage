@@ -253,14 +253,50 @@ $xamlText = @'
 
       <!-- +2 分隔线 +11 -->
       <Rectangle x:Name="Sep" Height="1" Fill="{DynamicResource SeparatorBrush}" Margin="0,10,0,10"/>
-      <!-- footer:11.5 medium labelColor 当日总量;失败态右侧露出「🔑 配置 API Key」按钮 -->
+      <!-- footer:11.5 medium labelColor 当日总量;右侧 💹 悬浮本机/账号对比;失败态露出「🔑 配置 API Key」 -->
       <Grid x:Name="FooterGrid">
         <TextBlock x:Name="FLabel" Text="" FontSize="11.5" FontWeight="Medium" Foreground="{DynamicResource LabelBrush}" VerticalAlignment="Center"/>
-        <Border x:Name="BtnKey" CornerRadius="6" Background="#0A84FF" Padding="10,4" HorizontalAlignment="Right"
+        <TextBlock x:Name="BtnLocal" Text="💹" FontSize="12" Foreground="{DynamicResource SecondaryBrush}" Cursor="Hand" ToolTip="本机 / 账号消耗对比"
+                   HorizontalAlignment="Right" Margin="0,0,26,0" VerticalAlignment="Center"/>
+        <Border x:Name="BtnKey" CornerRadius="6" Background="#0A84FF" Padding="10,4" HorizontalAlignment="Right" Margin="26,0,0,0"
                 Visibility="Collapsed" Cursor="Hand" ToolTip="手动选择服务商并粘贴 API Key">
           <TextBlock Text="🔑 配置 API Key" FontSize="11" FontWeight="Medium" Foreground="White"/>
         </Border>
       </Grid>
+      <Popup x:Name="LocalPopup" StaysOpen="True" AllowsTransparency="True" PopupAnimation="Fade">
+        <Border CornerRadius="10" Background="{DynamicResource RootBgBrush}" BorderBrush="{DynamicResource BorderBrushR}" BorderThickness="1" Padding="14,12" Width="310">
+          <StackPanel>
+            <Grid Height="16">
+              <TextBlock Text="💻 本机 / 账号消耗(当日)" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource LabelBrush}" VerticalAlignment="Center"/>
+              <TextBlock x:Name="LPct" Text="" FontSize="11" FontWeight="Bold" HorizontalAlignment="Right" Foreground="#0A84FF" VerticalAlignment="Center"/>
+            </Grid>
+            <!-- 叠加条:整条=账号总量(浅色,100%),本机(蓝)从左端叠加,直观看出占比 -->
+            <Grid Height="8" Margin="0,8,0,0" ClipToBounds="True">
+              <Border Height="8" CornerRadius="4" Background="#40FFFFFF"/>
+              <Border x:Name="LFill" Height="8" CornerRadius="4" HorizontalAlignment="Left" Width="0" Background="#0A84FF"/>
+            </Grid>
+            <TextBlock FontSize="9.5" Foreground="{DynamicResource TertiaryBrush}" Margin="0,4,0,0" Text="■ 本机(蓝) · □ 账号总量(整条,含所有设备)"/>
+            <Rectangle Height="1" Fill="{DynamicResource SeparatorBrush}" Margin="0,8,0,6"/>
+            <Grid Height="15">
+              <TextBlock Text="本机调用" FontSize="10.5" Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center"/>
+              <TextBlock x:Name="LCalls" Text="" FontSize="10.5" HorizontalAlignment="Right" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
+            </Grid>
+            <Grid Height="15">
+              <TextBlock Text="本机 tokens(输入 / 输出 / 合计)" FontSize="10.5" Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center"/>
+              <TextBlock x:Name="LIO" Text="" FontSize="10.5" HorizontalAlignment="Right" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
+            </Grid>
+            <Grid x:Name="LModelsRow" Height="15">
+              <TextBlock Text="本机按模型" FontSize="10.5" Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center"/>
+              <TextBlock x:Name="LModels" Text="" FontSize="10.5" HorizontalAlignment="Right" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
+            </Grid>
+            <Grid Height="15" Margin="0,2,0,0">
+              <TextBlock Text="账号(全部设备)" FontSize="10.5" Foreground="{DynamicResource TertiaryBrush}" VerticalAlignment="Center"/>
+              <TextBlock x:Name="LTotalVal" Text="" FontSize="10.5" HorizontalAlignment="Right" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
+            </Grid>
+            <TextBlock Text="本机 = 本电脑当日实际调用(本地模型日志);账号 = 官方监控口径(含所有设备)" FontSize="9.5" Foreground="{DynamicResource QuaternaryBrush}" Margin="0,8,0,0" TextWrapping="Wrap"/>
+          </StackPanel>
+        </Border>
+      </Popup>
       <!-- 模型拆分紧贴当日行,居中显示;高峰/非高峰明细放其后 -->
       <TextBlock x:Name="FSub" Text="" FontSize="10.5" Foreground="{DynamicResource TertiaryBrush}" Margin="0,3,0,0" TextAlignment="Center"/>
       <Grid x:Name="PeakRow" Height="15" Margin="0,5,0,0">
@@ -296,6 +332,15 @@ $PeakBannerFill = & $el 'PeakBannerFill'
 $Sep = & $el 'Sep'
 $FooterGrid = & $el 'FooterGrid'
 $BtnKey = & $el 'BtnKey'
+$BtnLocal = & $el 'BtnLocal'
+$LocalPopup = & $el 'LocalPopup'
+$LPct = & $el 'LPct'
+$LFill = & $el 'LFill'
+$LCalls = & $el 'LCalls'
+$LIO = & $el 'LIO'
+$LModels = & $el 'LModels'
+$LModelsRow = & $el 'LModelsRow'
+$LTotalVal = & $el 'LTotalVal'
 $SetupPanel = & $el 'SetupPanel'
 $SetupBase = & $el 'SetupBase'
 $SetupKey = & $el 'SetupKey'
@@ -418,14 +463,22 @@ function Get-IsDarkTheme {
         $ok = [GLMNative.ZCodeProbe]::PrintWindow($z.MainWindowHandle, $hdc, 2)
         $g.ReleaseHdc($hdc); $g.Dispose()
         if ($ok) {
-          $lum = 0.0; $n = 0
+          # 采 9 个点的亮度,同时记录极差:ZCode 弹出纯白对话框/窗口未渲染时,
+          # PrintWindow 会采到一片均匀的白色——那是无效样本,不能据此切换主题
+          $lum = 0.0; $n = 0; $minL = 255.0; $maxL = 0.0
           foreach ($fx in @(0.012, 0.018, 0.024)) {
             foreach ($fy in @(0.3, 0.5, 0.7)) {
               $c = $bmp.GetPixel([int]($w * $fx), [int]($h * $fy))
-              $lum += 0.299 * $c.R + 0.587 * $c.G + 0.114 * $c.B; $n++
+              $lv = 0.299 * $c.R + 0.587 * $c.G + 0.114 * $c.B
+              $lum += $lv; $n++
+              if ($lv -lt $minL) { $minL = $lv }
+              if ($lv -gt $maxL) { $maxL = $lv }
             }
           }
           $bmp.Dispose()
+          if (($maxL - $minL) -lt 8 -and $null -ne $script:lastKnownDark) {
+            return $script:lastKnownDark # 全平 = 无效样本:沿用上次结论,防止整窗被带成白色
+          }
           $script:lastKnownDark = (($lum / $n) -lt 110)
           return $script:lastKnownDark
         }
@@ -671,6 +724,10 @@ function Invoke-Refresh {
   }
   $models = @($t.modelSummaryList | ForEach-Object { '{0} {1}' -f $_.modelName, (Format-Tokens ([double]$_.totalTokens)) })
   $FSub.Text = $models -join ' · '
+  # 本机/账号对比数据(💹 悬浮弹窗用)
+  $script:lastLocal = $d.localUsage
+  $script:lastTotalTokens = [double]$t.totalTokensUsage
+  $script:lastTotalCalls = [double]$t.totalModelCallCount
   $Meta.Text = ('{0} 套餐 · 更新于 {1}' -f $q.level.ToUpper(), (Get-Date -Format 'HH:mm:ss'))
 }
 
@@ -862,6 +919,31 @@ $win.Add_SourceInitialized({
   if (-not $script:blurOk) {
     $Root.Background = Brush $script:theme.RootOpaque
   }
+  # 💹 本机/账号对比弹窗:悬停即开,移开即关
+  $LocalPopup.PlacementTarget = $BtnLocal
+  $LocalPopup.Placement = 'Bottom'
+  $BtnLocal.Add_MouseEnter({
+    try {
+      if ($script:lastLocal) {
+        $loc = [double]$script:lastLocal.totalTokens
+        $tot = $script:lastTotalTokens
+        $pct = if ($tot -gt 0) { [Math]::Round($loc / $tot * 100, 1) } else { 0 }
+        $LPct.Text = '本机 {0}%' -f $pct
+        $LCalls.Text = '{0:N0} 次' -f [double]$script:lastLocal.calls
+        $LIO.Text = '{0} / {1} / {2}' -f (Format-Tokens ([double]$script:lastLocal.inputTokens)), (Format-Tokens ([double]$script:lastLocal.outputTokens)), (Format-Tokens $loc)
+        $ms = @($script:lastLocal.byModel.PSObject.Properties | ForEach-Object { '{0} {1}' -f ($_.Name -replace '^GLM-[0-9.]+-', ''), (Format-Tokens ([double]$_.Value.tokens)) })
+        if ($ms.Count) { $LModels.Text = $ms -join ' · '; $LModelsRow.Visibility = 'Visible' } else { $LModelsRow.Visibility = 'Collapsed' }
+        $LTotalVal.Text = '{0:N0} 次 · {1}' -f [double]$script:lastTotalCalls, (Format-Tokens $tot)
+        $w = [Math]::Round(282 * [Math]::Min(100, [Math]::Max(0, $pct)) / 100)
+        $LFill.Width = [Math]::Max($w, 6)
+      } else {
+        $LPct.Text = ''; $LCalls.Text = ''; $LIO.Text = ''; $LModels.Text = ''; $LTotalVal.Text = ''
+        $LFill.Width = 0; $LModelsRow.Visibility = 'Collapsed'
+      }
+    } catch { }
+    $LocalPopup.IsOpen = $true
+  })
+  $BtnLocal.Add_MouseLeave({ $LocalPopup.IsOpen = $false })
   $src = [System.Windows.Interop.HwndSource]::FromHwnd($script:helper.Handle)
   $src.AddHook({
     param($hwnd, $msg, $wParam, $lParam, [ref]$handled)
@@ -875,18 +957,28 @@ $win.Add_SourceInitialized({
 
 # ZCode 启动检测:none→running 才算启动(避免 Electron 子进程重建误唤起)
 $script:zcodeWasRunning = [bool](Get-Process -Name 'ZCode' -ErrorAction SilentlyContinue)
+# 主题切换去抖:连续两次探测一致才换肤——单次坏采样(纯白弹窗/未渲染的新窗口)不触发
+$script:darkStreak = 0
+$script:pendingDark = $null
 $zcodeTimer = New-Object System.Windows.Threading.DispatcherTimer
 $zcodeTimer.Interval = [TimeSpan]::FromMilliseconds(2000)
 $zcodeTimer.Add_Tick({
   # ZCode 外观跟随:探测 ZCode 主窗口配色,变化即整体换肤(并记日志便于排查)
   $dark = Get-IsDarkTheme
   if ($dark -ne $script:isDark) {
-    $script:isDark = $dark
-    Apply-Theme
-    try {
-      Add-Content -Path (Join-Path $env:USERPROFILE '.zcode\scripts\widget-theme.log') `
-        -Value ("{0} -> {1}" -f (Get-Date -Format 'MM/dd HH:mm:ss'), $(if ($dark) { 'dark' } else { 'light' }))
-    } catch { }
+    $script:darkStreak = 1 + [int]($script:pendingDark -eq $dark)
+    $script:pendingDark = $dark
+    if ($script:darkStreak -ge 2) {
+      $script:isDark = $dark
+      Apply-Theme
+      try {
+        Add-Content -Path (Join-Path $env:USERPROFILE '.zcode\scripts\widget-theme.log') `
+          -Value ("{0} -> {1}" -f (Get-Date -Format 'MM/dd HH:mm:ss'), $(if ($dark) { 'dark' } else { 'light' }))
+      } catch { }
+      $script:darkStreak = 0
+    }
+  } else {
+    $script:darkStreak = 0
   }
   # 高峰横幅:进入/退出高峰与倒计时刷新(2s 粒度)
   Update-PeakBanner

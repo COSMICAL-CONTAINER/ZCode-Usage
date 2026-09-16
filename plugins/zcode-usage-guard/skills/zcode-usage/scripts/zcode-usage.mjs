@@ -488,6 +488,40 @@ async function recordHistory(quota, file) {
   }
 }
 
+// ---------- 本机消耗:解析本地 rollout 的模型 I/O 日志(账号级之外的机器视角) ----------
+// 数据源:~/.zcode/cli/rollout/model-io-sess_*.jsonl,每行一次模型请求,含
+// completedAt / model.modelId / response.usage.{inputTokens,outputTokens,totalTokens}。
+// 逐行正则提取(不 JSON.parse 整行——单行可达数百 KB),只统计北京时间当日。
+export function localUsageToday(nowMs, rolloutDir) {
+  const rdir = rolloutDir || path.join(os.homedir(), '.zcode', 'cli', 'rollout');
+  const dayStart = bjDayStartMs(nowMs);
+  const out = { calls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, byModel: {} };
+  let files = [];
+  try { files = fs.readdirSync(rdir).filter((f) => /^model-io-sess_.*\.jsonl$/.test(f)); } catch { return out; }
+  for (const f of files) {
+    let lines;
+    try { lines = fs.readFileSync(path.join(rdir, f), 'utf8').split('\n'); } catch { continue; }
+    for (const line of lines) {
+      if (!line.includes('"totalTokens":')) continue; // 快速预筛,跳过绝大多数行
+      const ts = line.match(/"completedAt":"([^"]+)"/);
+      if (!ts || !(Date.parse(ts[1]) >= dayStart)) continue;
+      const tot = line.match(/"totalTokens":(\d+)/);
+      if (!tot) continue; // 无用量(中断/失败)的请求
+      const inp = line.match(/"inputTokens":(\d+)/);
+      const outp = line.match(/"outputTokens":(\d+)/);
+      const mid = (line.match(/"modelId":"([^"]+)"/) || [])[1] || '未知';
+      out.calls++;
+      out.inputTokens += Number(inp?.[1]) || 0;
+      out.outputTokens += Number(outp?.[1]) || 0;
+      out.totalTokens += Number(tot[1]) || 0;
+      const bm = out.byModel[mid] || (out.byModel[mid] = { calls: 0, tokens: 0 });
+      bm.calls++;
+      bm.tokens += Number(tot[1]) || 0;
+    }
+  }
+  return out;
+}
+
 // ---------- 主流程 ----------
 async function main() {
   ensureCred();
@@ -555,7 +589,10 @@ async function main() {
   }
 
   if (asJson) {
-    console.log(JSON.stringify({ quota, modelUsage, toolUsage, usageSplit }, null, 2));
+    console.log(JSON.stringify({
+      quota, modelUsage, toolUsage, usageSplit,
+      localUsage: localUsageToday(nowMs), // 本机视角:解析本地模型 I/O 日志(北京时间当日)
+    }, null, 2));
     return;
   }
 
