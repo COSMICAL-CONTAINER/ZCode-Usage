@@ -107,7 +107,7 @@ $xamlText = @'
                    VerticalAlignment="Center"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
           <TextBlock x:Name="BtnSettings" Text="⚙" FontSize="13" Foreground="{DynamicResource SecondaryBrush}" Cursor="Hand"
-                     ToolTip="设置(刷新间隔 / 快捷键 / 额度阈值)" Margin="0,0,12,0"/>
+                     ToolTip="设置(刷新间隔 / 快捷键 / 各池告警阈值)" Margin="0,0,12,0"/>
           <TextBlock x:Name="BtnRefresh" Text="↻" FontSize="13" Foreground="{DynamicResource SecondaryBrush}" Cursor="Hand"
                      ToolTip="立即刷新" Margin="0,0,12,0"/>
           <TextBlock x:Name="BtnClose" Text="✕" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource SecondaryBrush}"
@@ -144,7 +144,16 @@ $xamlText = @'
       <!-- ⚙ 设置面板:刷新间隔 / 唤出快捷键 / 额度阈值(保存到 quota-guard-settings.json,与 guard 共用) -->
       <StackPanel x:Name="SettingsPanel" Visibility="Collapsed">
         <TextBlock Text="⚙ 设置" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource LabelBrush}"/>
-        <TextBlock Text="修改即时生效;阈值与额度告警(quota-guard)共用一份配置" FontSize="10.5" Foreground="{DynamicResource TertiaryBrush}" Margin="0,3,0,10"/>
+        <Grid Margin="0,3,0,10">
+          <TextBlock Text="修改即时生效;阈值用于右下角弹窗告警与「额度守卫」自动续跑" FontSize="10.5" Foreground="{DynamicResource TertiaryBrush}" TextWrapping="Wrap"/>
+          <TextBlock x:Name="BtnHelp" Text="?" FontSize="10.5" FontWeight="Bold" Cursor="Hand" HorizontalAlignment="Right" Margin="4,0,0,0" Foreground="#0A84FF">
+            <TextBlock.ToolTip>
+              <ToolTip MaxWidth="300">
+                <TextBlock TextWrapping="Wrap" Text="「额度守卫」说明:任一额度池用量达到这里的阈值时,Windows 右下角会弹出告警;对话收尾时若额度不足,会自动保存工作进度并布置重置后自动续跑的定时任务,实现无人值守长跑。本机/账号对比看当日行右侧的 💹 图标。"/>
+              </ToolTip>
+            </TextBlock.ToolTip>
+          </TextBlock>
+        </Grid>
         <Grid Height="26">
           <TextBlock Text="自动刷新间隔" FontSize="11.5" Foreground="{DynamicResource SecondaryBrush}" VerticalAlignment="Center"/>
           <ComboBox x:Name="SetRefresh" Width="110" Height="24" FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center">
@@ -198,7 +207,7 @@ $xamlText = @'
           </ComboBox>
         </Grid>
         <TextBlock x:Name="SetHint" Text="" FontSize="10" Foreground="#FFA94D" Margin="0,8,0,0" TextWrapping="Wrap"/>
-        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+        <StackPanel Orientation="Horizontal" Margin="0,10,0,0" HorizontalAlignment="Right">
           <Border x:Name="BtnSaveSettings" CornerRadius="6" Background="#0A84FF" Padding="14,5" Cursor="Hand" Margin="0,0,10,0">
             <TextBlock Text="保存" FontSize="11.5" FontWeight="SemiBold" Foreground="White"/>
           </Border>
@@ -643,7 +652,7 @@ function Update-QuotaToast {
       $script:toastWarned[$cycleKey] = $true
       $label = if ($script:poolLabels.ContainsKey($key)) { $script:poolLabels[$key] } else { $key }
       $resetTxt = if ($l.nextResetTime -gt 0) { (Format-Clock $l.nextResetTime) + ' 重置' } else { '' }
-      Show-Toast '⚡ GLM 额度警报' ("{0} 已用 {1:F0}%,{2}。可按 quota-guard 协议布置续跑。" -f $label, $p, $resetTxt)
+      Show-Toast '⚡ GLM 额度警报' ("{0} 已用 {1:F0}%,{2}。可按「额度守卫」协议布置续跑。" -f $label, $p, $resetTxt)
     }
   } catch { }
 }
@@ -652,6 +661,7 @@ function Invoke-Refresh {
   # 从手动配置/设置回到数据视图:恢复各区块可见性(配置态把它们全部收起了)
   Hide-Setup
   Hide-Settings
+        $Meta.Visibility = 'Visible'
   $Sep.Visibility = 'Visible'
   $FooterGrid.Visibility = 'Visible'
   $FSub.Visibility = 'Visible'; $Hint.Visibility = 'Visible'
@@ -792,7 +802,7 @@ function Set-ThresholdCombo($combo, [string]$key, $cfg) {
   $combo.SelectedIndex = if ($idx -ge 0) { $idx + 1 } else { 4 }
 }
 function Show-Settings {
-  $Meta.Text = '设置'
+        $Meta.Visibility = 'Collapsed' # 面板自带「⚙ 设置」标题,状态行不重复显示
   $PeakBanner.Visibility = 'Collapsed'
   foreach ($r in $rows) { $r.Panel.Visibility = 'Collapsed' }
   $Sep.Visibility = 'Collapsed'; $FooterGrid.Visibility = 'Collapsed'
@@ -888,15 +898,27 @@ $BtnClose.Add_MouseEnter({ $BtnClose.Foreground = Brush '#FF5A5A' })
 $BtnClose.Add_MouseLeave({ $BtnClose.Foreground = Brush $script:theme.Secondary })
 $BtnClose.Add_MouseLeftButtonUp({ $win.Hide() })
 
-# 拖动(避开按钮),记忆位置;配置态/设置态禁用拖拽,否则鼠标点不进下拉框和密码框
+# 拖动(避开交互控件),记忆位置。
+# 命中测试:从点击处沿祖先链找,落在任何交互控件(下拉框/按钮/输入框)内就放行给控件自己,
+# 其余区域(标题/标签/空白)任何时候都可拖拽——包括设置面板打开时(标签和空白处拖,不挡控件)。
+# 🔑/⚙/↻/✕ 按钮必须排除:Down 一旦触发 DragMove 会吞掉 Up,按钮点击就"没反应"
+$script:interactive = @(
+  $SetRefresh, $SetHotkeyMod, $SetHotkeyKey, $SetTh5h, $SetThWeekly, $SetThMcp,
+  $BtnSaveSettings, $BtnCancelSettings, $SetupBase, $SetupKey, $BtnSaveKey, $BtnClearKey,
+  $BtnSettings, $BtnRefresh, $BtnClose, $BtnKey, $BtnLocal
+)
+function Test-OnInteractive($el) {
+  $cur = $el
+  while ($null -ne $cur) {
+    foreach ($c in $script:interactive) { if ([object]::ReferenceEquals($cur, $c)) { return $true } }
+    $cur = $cur.Parent
+  }
+  return $false
+}
 $win.Add_MouseLeftButtonDown({
   $src = $_.OriginalSource
-  if ($SetupPanel.Visibility -eq 'Visible' -or $SettingsPanel.Visibility -eq 'Visible') { return }
-  # 🔑/⚙ 按钮必须排除:点按钮的 MouseLeftButtonDown 一旦触发 DragMove,
-  # 系统移动循环会吞掉随后的 MouseLeftButtonUp,按钮点击就"没反应"。
-  # 命中源可能是 Border 本体(内边距)或里面的 TextBlock(文字),两者都要放行
-  $onKey = ($src -eq $BtnKey) -or ($src.Parent -eq $BtnKey)
-  if ($src -ne $BtnRefresh -and $src -ne $BtnClose -and $src -ne $BtnSettings -and -not $onKey) { $win.DragMove(); Save-Pos }
+  if (Test-OnInteractive $src) { return } # 交互控件自己处理点击(下拉框/按钮/输入框)
+  $win.DragMove(); Save-Pos
 })
 $win.Add_Closing({ Save-Pos })
 
