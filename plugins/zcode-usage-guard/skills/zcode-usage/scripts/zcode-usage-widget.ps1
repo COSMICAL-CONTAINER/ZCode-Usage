@@ -68,6 +68,24 @@ if (-not (Test-Path $scriptPath)) {
   if ($cached) { $scriptPath = $cached.FullName }
 }
 
+# node 解析:悬浮窗是独立进程,PATH 可能不完整;找不到 node 时探测常见安装位置,
+# 全部失败则刷新时给出明确提示(而不是统一落到"查询失败"难以定位)
+function Resolve-NodeExe {
+  $cmd = Get-Command node -ErrorAction SilentlyContinue
+  if ($cmd -and $cmd.Source) { return $cmd.Source }
+  foreach ($cand in @(
+    "$env:ProgramFiles\nodejs\node.exe",
+    "${env:ProgramFiles(x86)}\nodejs\node.exe",
+    "$env:ProgramW6432\nodejs\node.exe",
+    "$env:LOCALAPPDATA\Programs\nodejs\node.exe",
+    "D:\Node.js\node.exe"
+  )) {
+    if ($cand -and (Test-Path $cand)) { return $cand }
+  }
+  return $null
+}
+$script:nodeExe = Resolve-NodeExe
+
 # —— 以下 XAML 与 ZCodeUsageHUD.swift 的 HUDMetrics/HUDContentView 布局一一对应 ——
 # 面板 372 宽(高自适应,官方公式约 306;底部当日 高峰/非高峰 明细两行后约 330);pad 18;圆角 16;边框白 10%
 # 字号阶梯:标题 14 bold / meta 10.5 / 行标题 12.5 semibold / 行数值 12 / sub 10.5 / footer 11.5 / hint 10
@@ -675,7 +693,14 @@ function Invoke-Refresh {
     $env:ANTHROPIC_BASE_URL = $mc.apiBase
   }
   # --state 落盘额度快照、--history 补录每周期用量(跨周期才发请求),供 guard/统计零网络读取
-  $raw = (& node $scriptPath --json --state (Join-Path $env:USERPROFILE '.zcode\scripts\usage-state.json') --history (Join-Path $env:USERPROFILE '.zcode\scripts\usage-history.jsonl') 2>&1 | Out-String).Trim()
+  if (-not $script:nodeExe) { $script:nodeExe = Resolve-NodeExe }
+  if (-not $script:nodeExe) {
+    $script:failReason = '未找到 Node 运行时:请安装 Node.js ≥18 并确认 node 在 PATH,装好后重启悬浮窗'
+    $raw = ''
+  } else {
+    $script:failReason = $null
+    $raw = (& $script:nodeExe $scriptPath --json --state (Join-Path $env:USERPROFILE '.zcode\scripts\usage-state.json') --history (Join-Path $env:USERPROFILE '.zcode\scripts\usage-history.jsonl') 2>&1 | Out-String).Trim()
+  }
   if ($mc) {
     Remove-Item Env:\ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:\ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue
@@ -685,7 +710,11 @@ function Invoke-Refresh {
   if (-not $d -or -not $d.quota) {
     # renderError:⚠️ 查询失败 + 消息放 sub,footer 提示重试,右侧露出「🔑 配置 API Key」
     $Meta.Text = '读取失败'
-    $msg = if ($raw -match '401') { 'API Key 已失效或被更换,点右下按钮更新' }
+    $msg = if ($script:failReason) { $script:failReason }
+      elseif ($raw -match '401') { 'API Key 已失效或被更换,点右下按钮更新' }
+      elseif ($raw -match '内部服务器错误|HTTP 5\d\d') { '智谱服务端错误,稍后点 ↻ 重试' }
+      elseif ($raw -match '请求超时|网络错误') { '网络错误,点右上角 ↻ 重试' }
+      elseif ($raw -match '未找到 Coding Plan API Key') { '未配置 API Key,点右下按钮手动填写' }
       elseif ($raw) { ($raw -split "`r?`n")[0] } else { '网络错误,点右上角 ↻ 重试' }
     Set-Row $rows[0] '⚠️  查询失败' '' 0 $msg
     foreach ($r in $rows | Select-Object -Skip 1) { $r.Panel.Visibility = 'Collapsed' }
@@ -765,6 +794,12 @@ function Hide-Setup { $SetupPanel.Visibility = 'Collapsed' }
 function Save-Setup {
   $key = $SetupKey.Password.Trim()
   if (-not $key) { $SetupHint.Text = '请先粘贴 API Key 再保存'; return }
+  # Key 格式校验:智谱 Key 形如 id.secret(无空格的字母数字/点/横线组合)。
+  # 曾有用户把 shell 命令误粘进来,Key 优先级最高,直接屏蔽有效凭据导致持续"查询失败"
+  if ($key -match '[\s;；,，]' -or $key -notmatch '^[A-Za-z0-9._\-]{16,}$') {
+    $SetupHint.Text = '内容不像有效的 API Key(应为无空格的字母数字/点/横线组合,长度 ≥16),请检查后重新粘贴'
+    return
+  }
   $base = if ($SetupBase.SelectedIndex -eq 1) { 'https://api.z.ai/api/anthropic' } else { 'https://open.bigmodel.cn/api/anthropic' }
   Save-ManualCred $key $base
   Hide-Setup
